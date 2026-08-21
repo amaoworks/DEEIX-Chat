@@ -21,6 +21,7 @@ import (
 	channelhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/channel"
 	contentmoderationhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/contentmoderation"
 	conversationhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/conversation"
+	internalmessaginghttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/internalmessaging"
 	knowledgebasehttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/knowledgebase"
 	mcphttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/mcp"
 	memoryhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/memory"
@@ -68,6 +69,7 @@ type Modules struct {
 	Settings          *settingshttp.Module
 	User              *userhttp.Module
 	UserSettings      *usersettingshttp.Module
+	InternalMessaging *internalmessaginghttp.Module
 	StartupLog        func(*zap.Logger)
 }
 
@@ -181,6 +183,9 @@ func NewEngine(cfg *config.Runtime, log *zap.Logger, modules Modules, hc HealthC
 	}
 	if modules.User != nil {
 		modules.User.RegisterRoutes(authRequired)
+	}
+	if modules.InternalMessaging != nil {
+		modules.InternalMessaging.RegisterRoutes(authRequired)
 	}
 	if modules.Admin != nil || modules.Auth != nil || modules.Billing != nil || modules.Channel != nil || modules.MCP != nil || modules.Settings != nil || modules.Announcement != nil || modules.PromptPreset != nil || modules.Skill != nil || modules.KnowledgeBase != nil || modules.ContentModeration != nil {
 		adminGroup := authRequired.Group("/admin")

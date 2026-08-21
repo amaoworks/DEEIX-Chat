@@ -9,7 +9,7 @@
     "sync:icons": "node scripts/sync-lobehub-icons.mjs",
     "sync:pwa-assets": "node scripts/sync-pwa-assets.mjs",
     "predev": "pnpm check:version && pnpm sync:icons && pnpm sync:pwa-assets",
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack --hostname 0.0.0.0",
     "prebuild": "pnpm check:version && pnpm sync:icons && pnpm sync:pwa-assets",
     "build": "next build --turbopack",
     "analyze": "next experimental-analyze",

@@ -61,6 +61,7 @@ type UserListFilter struct {
 	Query              string
 	SubscriptionStatus string
 	IdentityProvider   string
+	Status             string
 }
 
 // UpdateSessionActivityInput 定义会话活动元数据更新字段。

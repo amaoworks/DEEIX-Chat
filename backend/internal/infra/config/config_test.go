@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	sharedsecurity "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/security"
@@ -210,6 +211,57 @@ security:
 	}
 }
 
+func TestLoadReadsInternalMessagingSecretFileRelativeToConfig(t *testing.T) {
+	cleanupConfigEnv(t)
+
+	root := t.TempDir()
+	secretDir := filepath.Join(root, "secrets")
+	if err := os.MkdirAll(secretDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(secretDir, "vocechat-secret")
+	if err := os.WriteFile(secretPath, []byte("file-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+internal_messaging:
+  enabled: true
+  vocechat_url: "http://vocechat:3000"
+  secret_file: "./secrets/vocechat-secret"
+  timeout_ms: 10000
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CONFIG_FILE", configPath)
+
+	cfg := Load()
+	if cfg.InternalMessagingSecret != "file-secret" {
+		t.Fatalf("secret = %q", cfg.InternalMessagingSecret)
+	}
+	assertPath(t, "internal messaging secret", cfg.InternalMessagingSecretFile, secretPath)
+
+	// The existing inline value remains the explicit compatibility override.
+	t.Setenv("INTERNAL_MESSAGING_SECRET", "inline-secret")
+	cfg = Load()
+	if cfg.InternalMessagingSecret != "inline-secret" {
+		t.Fatalf("inline secret must take priority, got %q", cfg.InternalMessagingSecret)
+	}
+}
+
+func TestValidateExplainsUnreadableInternalMessagingSecretFile(t *testing.T) {
+	cfg := validConfigForEnv("dev")
+	cfg.InternalMessagingEnabled = true
+	cfg.InternalMessagingVoceChatURL = "http://vocechat:3000"
+	cfg.InternalMessagingSecretFile = filepath.Join(t.TempDir(), "missing-secret")
+	cfg.InternalMessagingTimeoutMS = 10000
+
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "internal_messaging.secret_file") {
+		t.Fatalf("expected secret_file validation error, got %v", err)
+	}
+}
+
 func TestValidateRejectsInvalidSSRFAllowlist(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -390,6 +442,11 @@ func cleanupConfigEnv(t *testing.T) {
 		"SSRF_ALLOWED_HOSTS",
 		"SSRF_ALLOWED_CIDRS",
 		"POSTGRES_DSN",
+		"INTERNAL_MESSAGING_ENABLED",
+		"INTERNAL_MESSAGING_VOCECHAT_URL",
+		"INTERNAL_MESSAGING_SECRET",
+		"INTERNAL_MESSAGING_SECRET_FILE",
+		"INTERNAL_MESSAGING_TIMEOUT_MS",
 	}
 	for _, key := range keys {
 		key := key

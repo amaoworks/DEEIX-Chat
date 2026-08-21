@@ -43,6 +43,9 @@ func TestOutboundHTTPCallSitesAreExplicit(t *testing.T) {
 				"internal/infra/extract/ocr/client.go",
 				"internal/infra/extract/mineru/client.go",
 				"internal/infra/geoip/client.go",
+				// VoceChat is an administrator-configured, Docker-private service.
+				// It must not use the public egress policy intended for user-configured upstreams.
+				"internal/infra/integration/vocechat/client.go",
 				"internal/infra/llm/client.go",
 				"internal/infra/mcp/client.go",
 				"internal/infra/mediaartifact/client.go",

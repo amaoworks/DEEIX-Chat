@@ -6,7 +6,7 @@
     "build": "make build",
     "check": "make check-version && go vet ./...",
     "clean": "rm -rf ../.cache/deeix-chat",
-    "dev": "make run",
+    "dev": "../scripts/dev-api.sh",
     "test": "make test"
   }
 }

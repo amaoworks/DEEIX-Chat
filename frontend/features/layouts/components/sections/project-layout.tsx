@@ -10,6 +10,7 @@ import { AppSidebar } from "@/features/layouts/components/navigation/app-sidebar
 import { MobileHeader } from "@/features/layouts/components/sections/mobile-header";
 import { ChatSessionProvider, useChatSession } from "@/features/chat";
 import { AppearancePreferencesSync } from "@/features/settings";
+import { InternalMessagingHost } from "@/features/internal-messaging";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 import { UserLocaleSync } from "@/i18n/user-locale-sync";
 
@@ -61,10 +62,13 @@ function ProjectLayoutShell({
       <AppSidebar onCreateConversation={handleCreateConversation} />
       <SidebarInset>
         <MobileHeader onCreateConversation={handleCreateConversation} />
-        <div className="flex h-full min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-2 md:p-4 md:pt-0">
-          {children}
+        <div className="flex h-full min-h-0 flex-1 overflow-hidden pb-2 md:gap-4 md:p-4 md:pt-0">
+          <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-hidden">
+            {children}
+          </div>
         </div>
       </SidebarInset>
+      <InternalMessagingHost />
     </>
   );
 }

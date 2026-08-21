@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -299,6 +300,13 @@ type yamlConfig struct {
 			SamplingRate float64 `yaml:"sampling_rate"`
 		} `yaml:"tracing"`
 	} `yaml:"observability"`
+	InternalMessaging struct {
+		Enabled     *bool  `yaml:"enabled"`
+		VoceChatURL string `yaml:"vocechat_url"`
+		Secret      string `yaml:"secret"`
+		SecretFile  string `yaml:"secret_file"`
+		TimeoutMS   int    `yaml:"timeout_ms"`
+	} `yaml:"internal_messaging"`
 }
 
 // Config 管理后端服务的运行参数。
@@ -383,6 +391,11 @@ type Config struct {
 	OTelExporterOTLPInsecure     bool
 	OTelExporterOTLPProtocol     string
 	OTelSamplingRate             float64
+	InternalMessagingEnabled     bool
+	InternalMessagingVoceChatURL string
+	InternalMessagingSecret      string
+	InternalMessagingSecretFile  string
+	InternalMessagingTimeoutMS   int
 
 	// ── 动态配置（由 DB 种子初始化默认值，settings.RuntimeSettings.ApplyTo 覆盖） ──
 	// 认证配置
@@ -542,6 +555,11 @@ var defaultYAMLPaths = []string{
 // 动态业务配置使用硬编码默认值，启动后由 settings.RuntimeSettings 从 DB 覆盖。
 func Load() Config {
 	yc := loadYAML()
+	internalMessagingSecretFile := envOrPath("INTERNAL_MESSAGING_SECRET_FILE", yc.InternalMessaging.SecretFile, "", yc.sourceDir)
+	internalMessagingSecret := strings.TrimSpace(envOr("INTERNAL_MESSAGING_SECRET", yc.InternalMessaging.Secret, ""))
+	if internalMessagingSecret == "" && internalMessagingSecretFile != "" {
+		internalMessagingSecret, _ = readSecretFile(internalMessagingSecretFile)
+	}
 	return Config{
 		// 静态基础设施
 		AppName:                      envOr("APP_NAME", yc.App.Name, defaultAppName),
@@ -622,6 +640,11 @@ func Load() Config {
 		OTelExporterOTLPInsecure:     envOrBoolPtr("OTEL_EXPORTER_OTLP_INSECURE", yc.Observability.Tracing.Insecure, false),
 		OTelExporterOTLPProtocol:     normalizeOTelExporterOTLPProtocol(envOr("OTEL_EXPORTER_OTLP_PROTOCOL", yc.Observability.Tracing.Protocol, "grpc")),
 		OTelSamplingRate:             envOrFloat("OTEL_TRACES_SAMPLER_ARG", envOrFloat("OTEL_SAMPLING_RATE", yc.Observability.Tracing.SamplingRate, 1), 1),
+		InternalMessagingEnabled:     envOrBoolPtr("INTERNAL_MESSAGING_ENABLED", yc.InternalMessaging.Enabled, false),
+		InternalMessagingVoceChatURL: strings.TrimRight(envOr("INTERNAL_MESSAGING_VOCECHAT_URL", yc.InternalMessaging.VoceChatURL, ""), "/"),
+		InternalMessagingSecret:      internalMessagingSecret,
+		InternalMessagingSecretFile:  internalMessagingSecretFile,
+		InternalMessagingTimeoutMS:   envOrInt("INTERNAL_MESSAGING_TIMEOUT_MS", yc.InternalMessaging.TimeoutMS, 10000),
 
 		// 动态配置默认值（会被 DB 覆盖）
 		TokenTTLHours:                     24,
@@ -779,6 +802,24 @@ func (c Config) Validate() error {
 	if _, err := sharedsecurity.NewOutboundPolicy(c.ssrfProtectionEnforced(), splitCommaSeparated(c.SSRFAllowedHosts), splitCommaSeparated(c.SSRFAllowedCIDRs)); err != nil {
 		return fmt.Errorf("invalid config: SSRF allowlist: %w", err)
 	}
+	if c.InternalMessagingEnabled {
+		parsed, err := url.Parse(c.InternalMessagingVoceChatURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return errors.New("invalid config: internal_messaging.vocechat_url must be an absolute URL when enabled")
+		}
+		if strings.TrimSpace(c.InternalMessagingSecret) == "" {
+			if c.InternalMessagingSecretFile != "" {
+				if _, err := readSecretFile(c.InternalMessagingSecretFile); err != nil {
+					return fmt.Errorf("invalid config: internal_messaging.secret_file: %w", err)
+				}
+				return errors.New("invalid config: internal_messaging.secret_file is empty")
+			}
+			return errors.New("invalid config: internal_messaging.secret is required when enabled")
+		}
+		if c.InternalMessagingTimeoutMS <= 0 {
+			return errors.New("invalid config: internal_messaging.timeout_ms must be positive")
+		}
+	}
 	if err := validateHTTPIntegrationURL(c.TurnstileSiteverifyURL, "TURNSTILE_SITEVERIFY_URL"); err != nil {
 		return err
 	}
@@ -810,6 +851,24 @@ func (c Config) Validate() error {
 	}
 
 	return nil
+}
+
+func readSecretFile(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	const maxSecretFileBytes = 64 * 1024
+	data, err := io.ReadAll(io.LimitReader(file, maxSecretFileBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > maxSecretFileBytes {
+		return "", errors.New("file exceeds 64 KiB")
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func (c Config) validateDatabase() error {

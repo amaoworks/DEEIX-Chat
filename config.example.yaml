@@ -102,3 +102,13 @@ observability:
     insecure: false
     protocol: grpc
     sampling_rate: 1
+
+# Optional private VoceChat integration for the in-app direct-message panel.
+# Keep the service on the Docker network; do not expose its API to browsers.
+internal_messaging:
+  enabled: false
+  vocechat_url: "http://vocechat:3000"
+  # Prefer a mounted secret file. `secret` remains available for compatibility.
+  secret_file: ""
+  secret: ""
+  timeout_ms: 10000

@@ -164,6 +164,8 @@ docs/rules/*
 frontend/public/vendor/lobehub-icons/
 frontend/public/pwa/generated/
 docker-compose.local.yml
+/.deeix/vocechat/
+/.deeix/deeix/
 
 .DS_Store
 .idea

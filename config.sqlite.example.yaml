@@ -87,3 +87,11 @@ observability:
     headers: ""
     insecure: false
     sampling_rate: 1
+
+internal_messaging:
+  # Optional. Enable only after the private VoceChat service is initialized.
+  enabled: false
+  vocechat_url: "http://vocechat:3000"
+  secret_file: ""
+  secret: ""
+  timeout_ms: 10000

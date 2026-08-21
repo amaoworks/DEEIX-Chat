@@ -1,0 +1,14 @@
+# VoceChat remains private to Docker; DEEIX is its only browser-facing UI.
+[webclient]
+url = ""
+
+[system]
+data_dir = "./data"
+
+[network]
+bind = "0.0.0.0:3000"
+
+[login]
+# DEEIX uses VoceChat's short-lived third-party login only; local users do not
+# need to use this service's web UI.
+third_party = true

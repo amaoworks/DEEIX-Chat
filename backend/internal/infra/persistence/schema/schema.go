@@ -74,6 +74,7 @@ func Models() []interface{} {
 		&model.PermissionGroupModelAccess{},
 		&model.PermissionGroupModelRule{},
 		&model.PermissionGroupUserAccess{},
+		&model.InternalMessagingBinding{},
 	}
 }
 

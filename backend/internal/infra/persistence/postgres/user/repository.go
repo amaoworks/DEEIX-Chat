@@ -373,6 +373,9 @@ func (r *Repo) ListUsers(ctx context.Context, offset int, limit int, filter repo
 			)
 		}
 	}
+	if status := strings.TrimSpace(filter.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, translateError(err)
