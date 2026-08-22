@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -34,14 +35,36 @@ type Login struct {
 type Message struct {
 	MID     int64 `json:"mid"`
 	FromUID int64 `json:"from_uid"`
+	Target  struct {
+		UID int64 `json:"uid"`
+	} `json:"target"`
 	// CreatedAt is an RFC3339 string in older VoceChat releases and a Unix
 	// millisecond timestamp in current releases. Keep the wire value raw and
 	// normalize it for the DEEIX API at the boundary.
 	CreatedAt json.RawMessage `json:"created_at"`
 	Detail    struct {
-		Type    string `json:"type"`
-		Content string `json:"content"`
+		Type        string                     `json:"type"`
+		ContentType string                     `json:"content_type"`
+		Content     string                     `json:"content"`
+		MID         int64                      `json:"mid"`
+		Properties  map[string]json.RawMessage `json:"properties"`
+		Reaction    struct {
+			Type        string                     `json:"type"`
+			ContentType string                     `json:"content_type"`
+			Content     string                     `json:"content"`
+			Properties  map[string]json.RawMessage `json:"properties"`
+		} `json:"detail"`
 	} `json:"detail"`
+}
+
+type UploadedFile struct {
+	Path            string `json:"path"`
+	Size            int64  `json:"size"`
+	Hash            string `json:"hash"`
+	ImageProperties *struct {
+		Width  uint32 `json:"width"`
+		Height uint32 `json:"height"`
+	} `json:"image_properties"`
 }
 
 // CreatedAtRFC3339 returns a browser-friendly timestamp across supported
@@ -143,6 +166,102 @@ func (c *Client) Send(ctx context.Context, token string, uid int64, content stri
 		return 0, err
 	}
 	return mid, nil
+}
+
+func (c *Client) Reply(ctx context.Context, token string, mid int64, content string) (int64, error) {
+	var createdMID int64
+	if err := c.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/api/message/%d/reply", mid), token, "text/plain", []byte(content), &createdMID, nil); err != nil {
+		return 0, err
+	}
+	return createdMID, nil
+}
+
+func (c *Client) Edit(ctx context.Context, token string, mid int64, content string) (int64, error) {
+	var reactionMID int64
+	if err := c.requestRaw(ctx, http.MethodPut, fmt.Sprintf("/api/message/%d/edit", mid), token, "text/plain", []byte(content), &reactionMID, nil); err != nil {
+		return 0, err
+	}
+	return reactionMID, nil
+}
+
+func (c *Client) Delete(ctx context.Context, token string, mid int64) (int64, error) {
+	var reactionMID int64
+	if err := c.requestJSON(ctx, http.MethodDelete, fmt.Sprintf("/api/message/%d", mid), token, nil, &reactionMID, nil); err != nil {
+		return 0, err
+	}
+	return reactionMID, nil
+}
+
+func (c *Client) UploadFile(ctx context.Context, token, filename, contentType string, content []byte) (UploadedFile, error) {
+	var fileID string
+	if err := c.requestJSON(ctx, http.MethodPost, "/api/resource/file/prepare", token, map[string]interface{}{
+		"filename": filename, "content_type": contentType,
+	}, &fileID, nil); err != nil {
+		return UploadedFile{}, err
+	}
+	if fileID == "" {
+		return UploadedFile{}, fmt.Errorf("vocechat file prepare returned no file id")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("file_id", fileID); err != nil {
+		return UploadedFile{}, err
+	}
+	part, err := writer.CreateFormFile("chunk_data", filename)
+	if err != nil {
+		return UploadedFile{}, err
+	}
+	if _, err = part.Write(content); err != nil {
+		return UploadedFile{}, err
+	}
+	if err = writer.WriteField("chunk_is_last", "true"); err != nil {
+		return UploadedFile{}, err
+	}
+	if err = writer.Close(); err != nil {
+		return UploadedFile{}, err
+	}
+	var uploaded *UploadedFile
+	if err = c.requestRaw(ctx, http.MethodPost, "/api/resource/file/upload", token, writer.FormDataContentType(), body.Bytes(), &uploaded, nil); err != nil {
+		return UploadedFile{}, err
+	}
+	if uploaded == nil || uploaded.Path == "" {
+		return UploadedFile{}, fmt.Errorf("vocechat file upload returned no path")
+	}
+	return *uploaded, nil
+}
+
+func (c *Client) SendFile(ctx context.Context, token string, uid int64, path string) (int64, error) {
+	payload, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return 0, err
+	}
+	var mid int64
+	if err = c.requestRaw(ctx, http.MethodPost, fmt.Sprintf("/api/user/%d/send", uid), token, "vocechat/file", payload, &mid, nil); err != nil {
+		return 0, err
+	}
+	return mid, nil
+}
+
+func (c *Client) DownloadFile(ctx context.Context, token, path string, thumbnail bool) (*http.Response, error) {
+	query := url.Values{"file_path": []string{path}}
+	if thumbnail {
+		query.Set("thumbnail", "true")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/resource/file?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-API-Key", token)
+	resp, err := c.events.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		return nil, responseError(resp)
+	}
+	return resp, nil
 }
 
 func (c *Client) UpdateName(ctx context.Context, token, name string) error {

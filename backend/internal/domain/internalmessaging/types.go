@@ -13,3 +13,34 @@ type Binding struct {
 	SyncedName   string
 	SyncedAt     time.Time
 }
+
+// MessageIndex mirrors the product-visible metadata of a VoceChat message.
+// VoceChat remains the source of truth for delivery and history; this index
+// powers durable unread counts, recent conversations and bounded search.
+type MessageIndex struct {
+	MID             int64
+	SenderUserID    uint
+	RecipientUserID uint
+	ContentType     string
+	Content         string
+	MetadataJSON    string
+	FileSize        int64
+	ReplyToMID      int64
+	SentAt          time.Time
+	EditedAt        time.Time
+	Deleted         bool
+}
+
+// ConversationState is directional: each participant owns an independent
+// read position, unread count, pin and mute preference for the same peer.
+type ConversationState struct {
+	UserID             uint
+	PeerUserID         uint
+	LastMessageMID     int64
+	LastMessagePreview string
+	LastMessageAt      time.Time
+	UnreadCount        int64
+	ReadThroughMID     int64
+	Pinned             bool
+	Muted              bool
+}

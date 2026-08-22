@@ -44,6 +44,26 @@ export async function patchAdminSettings(
   );
 }
 
+export type AdminInternalMessagingStatus = {
+  configured: boolean;
+  enabled: boolean;
+  healthy: boolean;
+  activeSSE: number;
+  voceRequests: number;
+  voceFailures: number;
+  averageLatencyMS: number;
+  indexedMessages: number;
+  fileBytes: number;
+};
+
+export async function getAdminInternalMessagingStatus(accessToken: string) {
+  return authedRequest<AdminInternalMessagingStatus>(
+    "/api/v1/admin/internal-messaging/status",
+    { accessToken },
+    true,
+  );
+}
+
 export async function getAdminTikaRuntime(accessToken: string): Promise<AdminTikaRuntimeView> {
   return authedRequest<AdminTikaRuntimeView>(
     "/api/v1/admin/settings/tika/runtime",

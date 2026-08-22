@@ -80,6 +80,16 @@ func (r *RuntimeSettings) cacheSet(ctx context.Context, item domainsettings.Syst
 
 func (r *RuntimeSettings) applyItem(cfg *config.Config, item domainsettings.SystemSetting) {
 	switch item.Namespace + ":" + item.Key {
+	case "internal_messaging:enabled":
+		cfg.InternalMessagingEnabled = toBool(item.Value, cfg.InternalMessagingEnabled)
+	case "internal_messaging:max_file_bytes":
+		cfg.InternalMessagingMaxBytes = toInt64(item.Value, cfg.InternalMessagingMaxBytes)
+	case "internal_messaging:retention_days":
+		cfg.InternalMessagingKeepDays = toInt(item.Value, cfg.InternalMessagingKeepDays)
+	case "internal_messaging:user_quota_bytes":
+		cfg.InternalMessagingUserQuota = toInt64(item.Value, cfg.InternalMessagingUserQuota)
+	case "internal_messaging:browser_notifications":
+		cfg.InternalMessagingWebNotify = toBool(item.Value, cfg.InternalMessagingWebNotify)
 	// 认证配置
 	case "auth:token_ttl_hours":
 		cfg.TokenTTLHours = toInt(item.Value, cfg.TokenTTLHours)

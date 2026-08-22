@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,15 +16,33 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type Handler struct{ service *app.Service }
+type auditWriter interface {
+	Write(context.Context, string, uint, string, string, string, string, string, interface{})
+}
 
-func NewHandler(service *app.Service) *Handler { return &Handler{service: service} }
+type Handler struct {
+	service *app.Service
+	audit   auditWriter
+}
+
+func NewHandler(service *app.Service) *Handler       { return &Handler{service: service} }
+func (h *Handler) SetAuditWriter(writer auditWriter) { h.audit = writer }
 
 type sendRequest struct {
 	Content string `json:"content" binding:"required,max=16000"`
 }
+type replyRequest struct {
+	Content   string `json:"content" binding:"required,max=16000"`
+	ReplyToID int64  `json:"replyToID" binding:"required"`
+}
+type editRequest struct {
+	Content string `json:"content" binding:"required,max=16000"`
+}
 type statusResponse struct {
-	Enabled bool `json:"enabled"`
+	Enabled              bool  `json:"enabled"`
+	UnreadCount          int64 `json:"unreadCount"`
+	MaxFileBytes         int64 `json:"maxFileBytes"`
+	BrowserNotifications bool  `json:"browserNotifications"`
 }
 type directoryUserResponse struct {
 	PublicID    string `json:"publicID"`
@@ -37,14 +56,97 @@ type directoryResponse struct {
 	HasMore bool                    `json:"hasMore"`
 }
 type messageResponse struct {
-	ID               int64  `json:"id"`
-	FromUserPublicID string `json:"fromUserPublicID"`
-	Content          string `json:"content"`
-	CreatedAt        string `json:"createdAt"`
+	ID               int64         `json:"id"`
+	FromUserPublicID string        `json:"fromUserPublicID"`
+	ContentType      string        `json:"contentType"`
+	Content          string        `json:"content"`
+	ReplyToID        int64         `json:"replyToID"`
+	CreatedAt        string        `json:"createdAt"`
+	EditedAt         string        `json:"editedAt"`
+	Deleted          bool          `json:"deleted"`
+	File             *fileResponse `json:"file,omitempty"`
+}
+type fileResponse struct {
+	Name        string `json:"name"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+	Image       bool   `json:"image"`
+	Width       uint32 `json:"width"`
+	Height      uint32 `json:"height"`
+}
+type adminStatusResponse struct {
+	Configured       bool  `json:"configured"`
+	Enabled          bool  `json:"enabled"`
+	Healthy          bool  `json:"healthy"`
+	ActiveSSE        int64 `json:"activeSSE"`
+	VoceRequests     int64 `json:"voceRequests"`
+	VoceFailures     int64 `json:"voceFailures"`
+	AverageLatencyMS int64 `json:"averageLatencyMS"`
+	IndexedMessages  int64 `json:"indexedMessages"`
+	FileBytes        int64 `json:"fileBytes"`
+}
+type messagePageResponse struct {
+	Results    []messageResponse `json:"results"`
+	HasMore    bool              `json:"hasMore"`
+	NextBefore int64             `json:"nextBefore"`
+}
+type conversationResponse struct {
+	User               directoryUserResponse `json:"user"`
+	LastMessageID      int64                 `json:"lastMessageID"`
+	LastMessagePreview string                `json:"lastMessagePreview"`
+	LastMessageAt      string                `json:"lastMessageAt"`
+	UnreadCount        int64                 `json:"unreadCount"`
+	Pinned             bool                  `json:"pinned"`
+	Muted              bool                  `json:"muted"`
+}
+type conversationPageResponse struct {
+	Total       int64                  `json:"total"`
+	TotalUnread int64                  `json:"totalUnread"`
+	Results     []conversationResponse `json:"results"`
+	HasMore     bool                   `json:"hasMore"`
+}
+type markReadRequest struct {
+	ThroughMID int64 `json:"throughMID"`
+}
+type preferenceRequest struct {
+	Pinned *bool `json:"pinned"`
+	Muted  *bool `json:"muted"`
 }
 
 func (h *Handler) Status(c *gin.Context) {
-	response.Success(c, statusResponse{Enabled: h.service != nil && h.service.Available(c.Request.Context(), middleware.MustUserID(c))})
+	actorID := middleware.MustUserID(c)
+	enabled := h.service != nil && h.service.Available(c.Request.Context(), actorID)
+	unread := int64(0)
+	if enabled {
+		unread = h.service.UnreadCount(c.Request.Context(), actorID)
+	}
+	maxFileBytes := int64(app.MaxFileBytes)
+	browserNotifications := false
+	if h.service != nil {
+		maxFileBytes = h.service.CurrentPolicy().MaxFileBytes
+		browserNotifications = h.service.BrowserNotificationsAllowed()
+	}
+	response.Success(c, statusResponse{Enabled: enabled, UnreadCount: unread, MaxFileBytes: maxFileBytes, BrowserNotifications: browserNotifications})
+}
+
+func (h *Handler) ListConversations(c *gin.Context) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "30"))
+	items, err := h.service.ListConversations(c.Request.Context(), middleware.MustUserID(c), page, pageSize)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	results := make([]conversationResponse, 0, len(items.Results))
+	for _, item := range items.Results {
+		results = append(results, conversationResponse{
+			User:          directoryUserResponse{PublicID: item.User.PublicID, Username: item.User.Username, DisplayName: item.User.DisplayName, AvatarURL: item.User.AvatarURL},
+			LastMessageID: item.LastMessageID, LastMessagePreview: item.LastMessagePreview,
+			LastMessageAt: item.LastMessageAt, UnreadCount: item.UnreadCount,
+			Pinned: item.Pinned, Muted: item.Muted,
+		})
+	}
+	response.Success(c, conversationPageResponse{Total: items.Total, TotalUnread: items.TotalUnread, Results: results, HasMore: items.HasMore})
 }
 
 func (h *Handler) ListUsers(c *gin.Context) {
@@ -73,7 +175,44 @@ func (h *Handler) History(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	response.Success(c, toMessageResponses(items))
+	response.Success(c, toMessagePageResponse(items))
+}
+
+func (h *Handler) MarkRead(c *gin.Context) {
+	var req markReadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	if err := h.service.MarkRead(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), req.ThroughMID); err != nil {
+		writeError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"ok": true})
+}
+
+func (h *Handler) SetConversationPreferences(c *gin.Context) {
+	var req preferenceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	if err := h.service.SetConversationPreferences(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), req.Pinned, req.Muted); err != nil {
+		writeError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"ok": true})
+}
+
+func (h *Handler) SearchMessages(c *gin.Context) {
+	before, _ := strconv.ParseInt(c.Query("before"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	items, err := h.service.SearchMessages(c.Request.Context(), middleware.MustUserID(c), c.Query("public_id"), c.Query("query"), before, limit)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.Success(c, toMessagePageResponse(items))
 }
 
 func (h *Handler) Send(c *gin.Context) {
@@ -88,6 +227,130 @@ func (h *Handler) Send(c *gin.Context) {
 		return
 	}
 	response.Success(c, toMessageResponse(item))
+}
+
+func (h *Handler) Reply(c *gin.Context) {
+	var req replyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	item, err := h.service.Reply(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), req.ReplyToID, req.Content)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	response.Success(c, toMessageResponse(item))
+}
+
+func (h *Handler) Edit(c *gin.Context) {
+	var req editRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	item, err := h.service.Edit(c.Request.Context(), middleware.MustUserID(c), parseMID(c), req.Content)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	h.writeAudit(c, "internal_message_edit", parseMID(c), nil)
+	response.Success(c, toMessageResponse(item))
+}
+
+func (h *Handler) Delete(c *gin.Context) {
+	if err := h.service.Delete(c.Request.Context(), middleware.MustUserID(c), parseMID(c)); err != nil {
+		writeError(c, err)
+		return
+	}
+	h.writeAudit(c, "internal_message_delete", parseMID(c), nil)
+	response.Success(c, gin.H{"ok": true})
+}
+
+func (h *Handler) SendFile(c *gin.Context) {
+	maxBytes := h.service.CurrentPolicy().MaxFileBytes
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes+(1<<20))
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(c, app.ErrFileTooLarge)
+			return
+		}
+		response.InvalidRequestBody(c, err)
+		return
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	defer file.Close()
+	content, err := h.service.ReadUpload(file, fileHeader.Size)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	item, err := h.service.SendFile(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), fileHeader.Filename, fileHeader.Header.Get("Content-Type"), content)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	detail := map[string]interface{}{}
+	if item.File != nil {
+		detail = map[string]interface{}{"name": item.File.Name, "size": item.File.Size, "content_type": item.File.ContentType}
+	}
+	h.writeAudit(c, "internal_message_file_send", item.ID, detail)
+	response.Success(c, toMessageResponse(item))
+}
+
+func (h *Handler) AdminStatus(c *gin.Context) {
+	if h.service == nil {
+		response.Error(c, http.StatusServiceUnavailable, "internal messaging is unavailable")
+		return
+	}
+	stats := h.service.Stats(c.Request.Context())
+	response.Success(c, adminStatusResponse{
+		Configured: stats.Configured, Enabled: stats.Enabled, Healthy: stats.Healthy,
+		ActiveSSE: stats.ActiveSSE, VoceRequests: stats.VoceRequests, VoceFailures: stats.VoceFailures,
+		AverageLatencyMS: stats.AverageLatencyMS, IndexedMessages: stats.IndexedMessages, FileBytes: stats.FileBytes,
+	})
+}
+
+func (h *Handler) writeAudit(c *gin.Context, action string, mid int64, detail interface{}) {
+	if h.audit == nil {
+		return
+	}
+	h.audit.Write(c.Request.Context(), middleware.MustRequestID(c), middleware.MustUserID(c), action, "internal_message", strconv.FormatInt(mid, 10), c.ClientIP(), c.Request.UserAgent(), detail)
+}
+
+func (h *Handler) DownloadFile(c *gin.Context) {
+	thumbnail := c.Query("thumbnail") == "true"
+	upstream, file, err := h.service.DownloadFile(c.Request.Context(), middleware.MustUserID(c), parseMID(c), thumbnail)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	defer upstream.Body.Close()
+	contentType := upstream.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = file.ContentType
+	}
+	disposition := "attachment"
+	if file.Image && c.Query("download") != "true" {
+		disposition = "inline"
+	}
+	headers := map[string]string{
+		"Cache-Control":          "private, max-age=3600",
+		"Content-Disposition":    mime.FormatMediaType(disposition, map[string]string{"filename": file.Name}),
+		"X-Content-Type-Options": "nosniff",
+	}
+	c.DataFromReader(upstream.StatusCode, upstream.ContentLength, contentType, upstream.Body, headers)
+}
+
+func parseMID(c *gin.Context) int64 {
+	mid, _ := strconv.ParseInt(c.Param("mid"), 10, 64)
+	return mid
 }
 
 // Events proxies VoceChat SSE through the authenticated DEEIX API. This keeps
@@ -131,7 +394,7 @@ func (h *Handler) enrichEventLine(ctx context.Context, line string) string {
 	if json.Unmarshal([]byte(raw), &header) != nil || header.Type != "chat" || header.FromUID <= 0 {
 		return line
 	}
-	publicID, err := h.service.EventSenderPublicID(ctx, header.FromUID)
+	publicID, err := h.service.ProcessEvent(ctx, raw)
 	if err != nil || publicID == "" {
 		return line
 	}
@@ -144,11 +407,35 @@ func (h *Handler) enrichEventLine(ctx context.Context, line string) string {
 		return line
 	}
 	payload["fromUserPublicID"] = publicIDJSON
+	sanitizeEventForBrowser(payload)
 	enriched, err := json.Marshal(payload)
 	if err != nil {
 		return line
 	}
 	return "data: " + string(enriched) + "\n"
+}
+
+// sanitizeEventForBrowser removes VoceChat-only resource identifiers after
+// ProcessEvent has persisted the full upstream event. File contents are served
+// exclusively through the authenticated DEEIX download endpoint, so the
+// browser never needs the private VoceChat file path carried in detail.content.
+func sanitizeEventForBrowser(payload map[string]json.RawMessage) {
+	raw, ok := payload["detail"]
+	if !ok {
+		return
+	}
+	var detail map[string]json.RawMessage
+	if json.Unmarshal(raw, &detail) != nil {
+		return
+	}
+	var contentType string
+	if json.Unmarshal(detail["content_type"], &contentType) != nil || contentType != "vocechat/file" {
+		return
+	}
+	detail["content"] = json.RawMessage(`""`)
+	if encoded, err := json.Marshal(detail); err == nil {
+		payload["detail"] = encoded
+	}
 }
 
 func toMessageResponses(items []app.ChatMessage) []messageResponse {
@@ -159,7 +446,14 @@ func toMessageResponses(items []app.ChatMessage) []messageResponse {
 	return results
 }
 func toMessageResponse(item app.ChatMessage) messageResponse {
-	return messageResponse{ID: item.ID, FromUserPublicID: item.FromUserPublicID, Content: item.Content, CreatedAt: item.CreatedAt}
+	result := messageResponse{ID: item.ID, FromUserPublicID: item.FromUserPublicID, ContentType: item.ContentType, Content: item.Content, ReplyToID: item.ReplyToID, CreatedAt: item.CreatedAt, EditedAt: item.EditedAt, Deleted: item.Deleted}
+	if item.File != nil {
+		result.File = &fileResponse{Name: item.File.Name, ContentType: item.File.ContentType, Size: item.File.Size, Image: item.File.Image, Width: item.File.Width, Height: item.File.Height}
+	}
+	return result
+}
+func toMessagePageResponse(page app.MessagePage) messagePageResponse {
+	return messagePageResponse{Results: toMessageResponses(page.Results), HasMore: page.HasMore, NextBefore: page.NextBefore}
 }
 func writeError(c *gin.Context, err error) {
 	switch {
@@ -167,6 +461,12 @@ func writeError(c *gin.Context, err error) {
 		response.Error(c, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, app.ErrRecipientUnavailable):
 		response.Error(c, http.StatusForbidden, err.Error())
+	case errors.Is(err, app.ErrMessageUnavailable):
+		response.Error(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, app.ErrFileTooLarge):
+		response.Error(c, http.StatusRequestEntityTooLarge, err.Error())
+	case errors.Is(err, app.ErrQuotaExceeded):
+		response.Error(c, http.StatusConflict, err.Error())
 	default:
 		response.Error(c, http.StatusBadGateway, "internal messaging unavailable")
 	}

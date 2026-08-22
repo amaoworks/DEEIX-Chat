@@ -17,6 +17,13 @@ const (
 // defaultSettings 返回所有动态配置的默认种子数据。
 func defaultSettings() []domainsettings.SystemSetting {
 	return []domainsettings.SystemSetting{
+		// 站内消息配置
+		{Namespace: "internal_messaging", Key: "enabled", Value: "false", ValueType: "bool", Description: "是否启用站内私聊"},
+		{Namespace: "internal_messaging", Key: "max_file_bytes", Value: strconv.FormatInt(20<<20, 10), ValueType: "int", Description: "单个聊天文件大小上限（字节）"},
+		{Namespace: "internal_messaging", Key: "retention_days", Value: "0", ValueType: "int", Description: "消息保留天数，0 表示永久保留"},
+		{Namespace: "internal_messaging", Key: "user_quota_bytes", Value: "0", ValueType: "int", Description: "每位用户发送文件的总配额（字节），0 表示不限制"},
+		{Namespace: "internal_messaging", Key: "browser_notifications", Value: "true", ValueType: "bool", Description: "是否允许用户开启浏览器消息通知"},
+
 		// 认证配置
 		{Namespace: "auth", Key: "token_ttl_hours", Value: "24", ValueType: "int", Description: "Access Token 有效期(小时)"},
 		{Namespace: "auth", Key: "refresh_token_ttl_hours", Value: "720", ValueType: "int", Description: "Refresh Token 有效期(小时)"},
@@ -194,7 +201,13 @@ func defaultSettings() []domainsettings.SystemSetting {
 }
 
 func defaultSettingsWithConfig(cfg config.Config) []domainsettings.SystemSetting {
-	return defaultSettings()
+	items := defaultSettings()
+	for index := range items {
+		if items[index].Namespace == "internal_messaging" && items[index].Key == "enabled" {
+			items[index].Value = strconv.FormatBool(cfg.InternalMessagingEnabled)
+		}
+	}
+	return items
 }
 
 func obsoleteSettings() []domainsettings.SystemSetting {

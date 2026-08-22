@@ -3,6 +3,7 @@ package vocechat
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -38,6 +39,49 @@ func TestLoginAsCreatesAndExchangesPrivateKey(t *testing.T) {
 	}
 	if !sawSecret || login.Token != "access-token" || login.User.UID != 12 {
 		t.Fatalf("unexpected login: %#v, secret=%t", login, sawSecret)
+	}
+}
+
+func TestUploadAndSendFileUseVoceChatFileContract(t *testing.T) {
+	var uploaded bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/resource/file/prepare":
+			_ = json.NewEncoder(w).Encode("file-id")
+		case "/api/resource/file/upload":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Fatal(err)
+			}
+			file, _, err := r.FormFile("chunk_data")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			content, _ := io.ReadAll(file)
+			uploaded = r.FormValue("file_id") == "file-id" && r.FormValue("chunk_is_last") == "true" && string(content) == "data"
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "2026/8/21/file-id", "size": 4, "hash": "hash"})
+		case "/api/user/42/send":
+			if r.Header.Get("Content-Type") != "vocechat/file" {
+				t.Fatalf("content type = %q", r.Header.Get("Content-Type"))
+			}
+			var payload map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["path"] != "2026/8/21/file-id" {
+				t.Fatalf("payload=%v err=%v", payload, err)
+			}
+			_ = json.NewEncoder(w).Encode(int64(101))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := New(server.URL, "unused", time.Second)
+	file, err := client.UploadFile(context.Background(), "token", "test.txt", "text/plain", []byte("data"))
+	if err != nil || !uploaded || file.Path != "2026/8/21/file-id" {
+		t.Fatalf("upload=%+v uploaded=%t err=%v", file, uploaded, err)
+	}
+	if mid, err := client.SendFile(context.Background(), "token", 42, file.Path); err != nil || mid != 101 {
+		t.Fatalf("mid=%d err=%v", mid, err)
 	}
 }
 

@@ -1,6 +1,10 @@
 # 站内消息（VoceChat）部署说明
 
-首版使用 DEEIX 自己的 UI 与 API；VoceChat 仅在 Docker 内网保存消息并提供实时事件。浏览器不会直接访问 VoceChat，也不会拿到它的 `X-SECRET` 或访问令牌。
+DEEIX 使用自己的 UI 与 API；VoceChat 仅在 Docker 内网保存消息并提供实时事件。浏览器不会直接访问 VoceChat，也不会拿到它的 `X-SECRET`、文件路径或访问令牌。
+
+当前版本支持最近会话、持久化未读与多设备同步、历史分页、消息搜索、置顶与静音、浏览器通知、图片/文件、回复、复制、编辑与撤回。聊天按钮和窗口的位置、尺寸按用户保存在浏览器。语音和群聊不在本版本范围。
+
+管理员可在“管理 → 站内消息”动态启停入口，设置单文件上限、每用户文件配额、保留天数和浏览器通知策略，并查看 VoceChat 健康、SSE 连接、请求失败、延迟、索引消息数与文件占用。VoceChat 地址和 third-party secret 仍属于启动级敏感配置，不通过管理页面写入。
 
 ## Docker Compose 自动初始化
 
@@ -131,7 +135,51 @@ docker compose -f docker-compose.yml -f docker-compose.vocechat.yml \
 docker compose -f docker-compose.yml -f docker-compose.vocechat.yml restart app
 ```
 
-已用 VoceChat OpenAPI `0.5.32` 验证的最小接口为：`/health`、`/api/token/create_third_party_key`、`/api/token/login`、`/api/user/{uid}/send`、`/api/user/{uid}/history` 与 `/api/user/events`。升级镜像前请重新验证这些接口、第三方登录开关和消息时间格式。
+已用 VoceChat OpenAPI `0.5.32` 验证的接口包括：`/health`、第三方密钥与登录、用户资料同步、文本发送与历史、SSE 事件、回复、编辑、撤回、文件上传与鉴权下载。具体方法和路径由 `scripts/check-vocechat-upgrade.sh` 维护；升级镜像前还需重新验证第三方登录开关和消息时间格式。
+
+### 备份与恢复
+
+开发环境应先停容器再备份三个关联目录，避免消息数据库、secret 与初始化凭据处于不同时间点：
+
+```bash
+./scripts/dev-vocechat.sh down
+./scripts/vocechat-state.sh backup /safe/path/vocechat-$(date +%F).tar.gz
+```
+
+恢复会先把当前状态移动到带时间戳的 `before-restore` 目录，不会直接删除：
+
+```bash
+./scripts/dev-vocechat.sh down
+./scripts/vocechat-state.sh restore /safe/path/vocechat-2026-08-21.tar.gz
+./scripts/dev-vocechat.sh up
+```
+
+生产环境需要在同一维护窗口备份 `vocechat_data`、`vocechat_secrets`、`vocechat_init_state` 三个卷以及 DEEIX 的 PostgreSQL/SQLite 数据库。VoceChat 保存消息正文，DEEIX 数据库保存身份绑定、未读、会话偏好和搜索索引；只恢复其中一侧会产生状态不一致。
+
+### 升级检查
+
+先在测试环境启动候选 VoceChat 镜像，然后检查 DEEIX 依赖的 OpenAPI 契约：
+
+```bash
+./scripts/check-vocechat-upgrade.sh http://127.0.0.1:3001
+```
+
+契约通过后仍需用两个 DEEIX 测试用户验收文本、实时未读、回复、编辑、撤回、图片/文件和历史分页，再升级生产镜像。不要直接用生产服务做带写入的兼容性测试。
+
+## 数据保留边界
+
+- 保留天数大于 0 时，DEEIX 每 6 小时扫描一批过期消息，并以原发送者身份调用 VoceChat 撤回，然后把本地索引标记为已删除；失败项保留等待下次重试。
+- VoceChat 的消息撤回不等同于立即擦除底层文件对象；需要物理销毁文件时，应结合 VoceChat 版本提供的资源清理能力和备份保留策略执行。
+- 消息搜索只覆盖已经进入 DEEIX 本地索引的消息；打开历史页会补齐相应索引。
+
+## 验收清单
+
+1. 两个普通用户互发消息，验证离线未读、按钮角标、最近会话和多设备已读同步。
+2. 分别验证文本回复、编辑、撤回，以及搜索结果定位到历史消息。
+3. 上传图片和普通文件，确认预览/下载需要 DEEIX 登录，且浏览器网络请求中没有 VoceChat token 或文件路径。
+4. 验证置顶、静音、通知策略、窗口拖动缩放和布局持久化。
+5. 管理员禁用后入口消失；重新启用后历史与偏好仍在。检查运行状态和审计日志。
+6. 执行一次停机备份、恢复和候选镜像契约检查。
 
 ## 运行边界
 

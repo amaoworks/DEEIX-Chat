@@ -396,6 +396,10 @@ type Config struct {
 	InternalMessagingSecret      string
 	InternalMessagingSecretFile  string
 	InternalMessagingTimeoutMS   int
+	InternalMessagingMaxBytes    int64
+	InternalMessagingKeepDays    int
+	InternalMessagingUserQuota   int64
+	InternalMessagingWebNotify   bool
 
 	// ── 动态配置（由 DB 种子初始化默认值，settings.RuntimeSettings.ApplyTo 覆盖） ──
 	// 认证配置
@@ -645,6 +649,10 @@ func Load() Config {
 		InternalMessagingSecret:      internalMessagingSecret,
 		InternalMessagingSecretFile:  internalMessagingSecretFile,
 		InternalMessagingTimeoutMS:   envOrInt("INTERNAL_MESSAGING_TIMEOUT_MS", yc.InternalMessaging.TimeoutMS, 10000),
+		InternalMessagingMaxBytes:    20 << 20,
+		InternalMessagingKeepDays:    0,
+		InternalMessagingUserQuota:   0,
+		InternalMessagingWebNotify:   true,
 
 		// 动态配置默认值（会被 DB 覆盖）
 		TokenTTLHours:                     24,

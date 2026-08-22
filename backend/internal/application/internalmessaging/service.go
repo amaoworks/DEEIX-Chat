@@ -2,11 +2,15 @@ package internalmessaging
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	domainmessaging "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/internalmessaging"
@@ -18,7 +22,12 @@ import (
 var (
 	ErrDisabled             = errors.New("internal messaging is disabled")
 	ErrRecipientUnavailable = errors.New("recipient is unavailable")
+	ErrMessageUnavailable   = errors.New("message is unavailable")
+	ErrFileTooLarge         = errors.New("file exceeds the configured size limit")
+	ErrQuotaExceeded        = errors.New("file quota exceeded")
 )
+
+const MaxFileBytes int64 = 20 << 20
 
 type userStore interface {
 	GetByID(context.Context, uint) (*domainuser.User, error)
@@ -32,21 +41,69 @@ type bindingStore interface {
 	FindByVoceUID(context.Context, int64) (*domainmessaging.Binding, error)
 }
 
+type conversationStore interface {
+	RecordMessage(context.Context, domainmessaging.MessageIndex) (bool, error)
+	ListConversations(context.Context, uint, int, int) ([]domainmessaging.ConversationState, int64, int64, error)
+	TotalUnread(context.Context, uint) (int64, error)
+	MarkRead(context.Context, uint, uint, int64) error
+	SetConversationPreferences(context.Context, uint, uint, *bool, *bool) error
+	SearchMessages(context.Context, uint, uint, string, int64, int) ([]domainmessaging.MessageIndex, error)
+	UserFileBytes(context.Context, uint) (int64, error)
+	MessageStats(context.Context) (int64, int64, error)
+	ListMessagesBefore(context.Context, time.Time, int) ([]domainmessaging.MessageIndex, error)
+	FindMessage(context.Context, uint, int64) (*domainmessaging.MessageIndex, error)
+	EditMessage(context.Context, uint, int64, string, string, string) error
+	DeleteMessage(context.Context, uint, int64) error
+}
+
 type voceClient interface {
 	Healthy(context.Context) bool
 	LoginAs(context.Context, string, string) (vocechat.Login, error)
 	History(context.Context, string, int64, int64, int) ([]vocechat.Message, error)
 	Send(context.Context, string, int64, string) (int64, error)
+	Reply(context.Context, string, int64, string) (int64, error)
+	Edit(context.Context, string, int64, string) (int64, error)
+	Delete(context.Context, string, int64) (int64, error)
+	UploadFile(context.Context, string, string, string, []byte) (vocechat.UploadedFile, error)
+	SendFile(context.Context, string, int64, string) (int64, error)
+	DownloadFile(context.Context, string, string, bool) (*http.Response, error)
 	UpdateName(context.Context, string, string) error
 	Events(context.Context, string, int64) (*http.Response, error)
 }
 
 type Service struct {
-	enabled          bool
+	configured       bool
 	users            userStore
 	bindings         bindingStore
+	conversations    conversationStore
 	voce             voceClient
 	provisioningLock sync.Map // map[uint]*sync.Mutex; only used for first bind
+	policyProvider   func() Policy
+	activeSSE        atomic.Int64
+	voceRequests     atomic.Int64
+	voceFailures     atomic.Int64
+	voceLatencyNS    atomic.Int64
+}
+
+type Policy struct {
+	Enabled                     bool
+	MaxFileBytes                int64
+	RetentionDays               int
+	UserQuotaBytes              int64
+	BrowserNotificationsAllowed bool
+}
+
+type RuntimeStats struct {
+	Configured       bool
+	Enabled          bool
+	Healthy          bool
+	ActiveSSE        int64
+	VoceRequests     int64
+	VoceFailures     int64
+	AverageLatencyMS int64
+	IndexedMessages  int64
+	FileBytes        int64
+	Policy           Policy
 }
 
 type DirectoryUser struct{ PublicID, Username, DisplayName, AvatarURL string }
@@ -58,19 +115,79 @@ type Page struct {
 type ChatMessage struct {
 	ID               int64
 	FromUserPublicID string
+	ContentType      string
 	Content          string
+	ReplyToID        int64
 	CreatedAt        string
+	EditedAt         string
+	Deleted          bool
+	File             *ChatFile
+}
+
+type ChatFile struct {
+	Name        string
+	ContentType string
+	Size        int64
+	Image       bool
+	Width       uint32
+	Height      uint32
+}
+
+type indexedFileMetadata struct {
+	ChatFile
+	Path string `json:"path"`
+}
+
+type MessagePage struct {
+	Results    []ChatMessage
+	HasMore    bool
+	NextBefore int64
+}
+
+type Conversation struct {
+	User               DirectoryUser
+	LastMessageID      int64
+	LastMessagePreview string
+	LastMessageAt      string
+	UnreadCount        int64
+	Pinned             bool
+	Muted              bool
+}
+
+type ConversationPage struct {
+	Total       int64
+	TotalUnread int64
+	Results     []Conversation
+	HasMore     bool
 }
 
 func NewService(enabled bool, users userStore, bindings bindingStore, voce voceClient) *Service {
-	return &Service{enabled: enabled, users: users, bindings: bindings, voce: voce}
+	state, _ := bindings.(conversationStore)
+	return &Service{configured: enabled, users: users, bindings: bindings, conversations: state, voce: voce}
 }
-func (s *Service) Enabled() bool { return s.enabled && s.voce != nil }
+func (s *Service) SetPolicyProvider(provider func() Policy) { s.policyProvider = provider }
+func (s *Service) policy() Policy {
+	policy := Policy{Enabled: s.configured, MaxFileBytes: MaxFileBytes, BrowserNotificationsAllowed: true}
+	if s.policyProvider != nil {
+		policy = s.policyProvider()
+	}
+	if policy.MaxFileBytes <= 0 {
+		policy.MaxFileBytes = MaxFileBytes
+	}
+	return policy
+}
+func (s *Service) Enabled() bool { return s.configured && s.policy().Enabled && s.voce != nil }
 
 // Available performs a bounded private-network readiness check for UI entry
 // decisions. Failed checks do not affect any other DEEIX feature.
 func (s *Service) Available(ctx context.Context, actorID uint) bool {
-	if !s.Enabled() || !s.voce.Healthy(ctx) {
+	if !s.Enabled() {
+		return false
+	}
+	started := time.Now()
+	healthy := s.voce.Healthy(ctx)
+	s.observeVoce(started, healthy)
+	if !healthy {
 		return false
 	}
 	actor, err := s.users.GetByID(ctx, actorID)
@@ -119,16 +236,28 @@ func (s *Service) ListUsers(ctx context.Context, actorID uint, query string, pag
 	return Page{Total: total, Results: results, HasMore: int64(page*pageSize) < total+1}, nil
 }
 
-func (s *Service) History(ctx context.Context, actorID uint, recipientPublicID string, before int64) ([]ChatMessage, error) {
+func (s *Service) History(ctx context.Context, actorID uint, recipientPublicID string, before int64) (MessagePage, error) {
 	actor, target, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
 	if err != nil {
-		return nil, err
+		return MessagePage{}, err
 	}
+	started := time.Now()
 	messages, err := s.voce.History(ctx, actorLogin.Token, targetLogin.User.UID, before, 50)
+	s.observeVoce(started, err == nil)
 	if err != nil {
-		return nil, err
+		return MessagePage{}, err
 	}
-	return s.toMessages(messages, actorLogin.User.UID, targetLogin.User.UID, actor.PublicID, target.PublicID), nil
+	for _, item := range messages {
+		s.recordVoceMessage(ctx, item, *actor, *target, actorLogin.User.UID)
+	}
+	results := s.toMessages(ctx, actor.ID, messages, actorLogin.User.UID, targetLogin.User.UID, actor.PublicID, target.PublicID)
+	nextBefore := int64(0)
+	for _, item := range results {
+		if nextBefore == 0 || item.ID < nextBefore {
+			nextBefore = item.ID
+		}
+	}
+	return MessagePage{Results: results, HasMore: len(messages) == 50, NextBefore: nextBefore}, nil
 }
 
 func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, content string) (ChatMessage, error) {
@@ -136,15 +265,188 @@ func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, con
 	if content == "" || len([]rune(content)) > 4000 {
 		return ChatMessage{}, fmt.Errorf("message must contain 1 to 4000 characters")
 	}
-	actor, _, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	actor, target, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
 	if err != nil {
 		return ChatMessage{}, err
 	}
+	started := time.Now()
 	mid, err := s.voce.Send(ctx, actorLogin.Token, targetLogin.User.UID, content)
+	s.observeVoce(started, err == nil)
 	if err != nil {
 		return ChatMessage{}, err
 	}
-	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, Content: content, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}, nil
+	sentAt := time.Now().UTC()
+	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
+		ContentType: "text/plain", Content: content, SentAt: sentAt,
+	})
+	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "text/plain", Content: content, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
+}
+
+func (s *Service) Reply(ctx context.Context, actorID uint, recipientPublicID string, replyToMID int64, content string) (ChatMessage, error) {
+	content = strings.TrimSpace(content)
+	if content == "" || len([]rune(content)) > 4000 || replyToMID <= 0 {
+		return ChatMessage{}, fmt.Errorf("reply must contain 1 to 4000 characters")
+	}
+	actor, target, actorLogin, _, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	if err = s.requireConversationMessage(ctx, actor.ID, target.ID, replyToMID, false); err != nil {
+		return ChatMessage{}, err
+	}
+	started := time.Now()
+	mid, err := s.voce.Reply(ctx, actorLogin.Token, replyToMID, content)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	sentAt := time.Now().UTC()
+	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
+		ContentType: "text/plain", Content: content, ReplyToMID: replyToMID, SentAt: sentAt,
+	})
+	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "text/plain", Content: content, ReplyToID: replyToMID, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
+}
+
+func (s *Service) Edit(ctx context.Context, actorID uint, mid int64, content string) (ChatMessage, error) {
+	content = strings.TrimSpace(content)
+	if content == "" || len([]rune(content)) > 4000 || mid <= 0 {
+		return ChatMessage{}, fmt.Errorf("message must contain 1 to 4000 characters")
+	}
+	item, actor, login, err := s.ownedMessage(ctx, actorID, mid)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	if item.Deleted || (item.ContentType != "text/plain" && item.ContentType != "text/markdown") {
+		return ChatMessage{}, ErrMessageUnavailable
+	}
+	started := time.Now()
+	_, err = s.voce.Edit(ctx, login.Token, mid, content)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	if err = s.conversations.EditMessage(ctx, actor.ID, mid, item.ContentType, content, item.MetadataJSON); err != nil {
+		return ChatMessage{}, err
+	}
+	item.Content = content
+	item.EditedAt = time.Now().UTC()
+	return indexedToChatMessage(*item, actor.PublicID), nil
+}
+
+func (s *Service) Delete(ctx context.Context, actorID uint, mid int64) error {
+	item, actor, login, err := s.ownedMessage(ctx, actorID, mid)
+	if err != nil {
+		return err
+	}
+	if item.Deleted {
+		return nil
+	}
+	started := time.Now()
+	_, err = s.voce.Delete(ctx, login.Token, mid)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return err
+	}
+	return s.conversations.DeleteMessage(ctx, actor.ID, mid)
+}
+
+func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID, filename, contentType string, content []byte) (ChatMessage, error) {
+	policy := s.policy()
+	if len(content) == 0 {
+		return ChatMessage{}, fmt.Errorf("file is empty")
+	}
+	if int64(len(content)) > policy.MaxFileBytes {
+		return ChatMessage{}, ErrFileTooLarge
+	}
+	filename = safeFilename(filename)
+	if filename == "" {
+		filename = "file"
+	}
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = http.DetectContentType(content)
+	}
+	actor, target, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	if policy.UserQuotaBytes > 0 && s.conversations != nil {
+		used, quotaErr := s.conversations.UserFileBytes(ctx, actor.ID)
+		if quotaErr != nil {
+			return ChatMessage{}, quotaErr
+		}
+		if used+int64(len(content)) > policy.UserQuotaBytes {
+			return ChatMessage{}, ErrQuotaExceeded
+		}
+	}
+	started := time.Now()
+	uploaded, err := s.voce.UploadFile(ctx, actorLogin.Token, filename, contentType, content)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	started = time.Now()
+	mid, err := s.voce.SendFile(ctx, actorLogin.Token, targetLogin.User.UID, uploaded.Path)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return ChatMessage{}, err
+	}
+	file := ChatFile{Name: filename, ContentType: contentType, Size: uploaded.Size, Image: strings.HasPrefix(contentType, "image/")}
+	if uploaded.ImageProperties != nil {
+		file.Width, file.Height = uploaded.ImageProperties.Width, uploaded.ImageProperties.Height
+	}
+	metadata, _ := json.Marshal(indexedFileMetadata{ChatFile: file, Path: uploaded.Path})
+	sentAt := time.Now().UTC()
+	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
+		ContentType: "vocechat/file", Content: uploaded.Path, MetadataJSON: string(metadata), FileSize: uploaded.Size, SentAt: sentAt,
+	})
+	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "vocechat/file", Content: "", File: &file, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
+}
+
+func (s *Service) DownloadFile(ctx context.Context, actorID uint, mid int64, thumbnail bool) (*http.Response, ChatFile, error) {
+	if !s.Enabled() || s.conversations == nil {
+		return nil, ChatFile{}, ErrDisabled
+	}
+	item, err := s.conversations.FindMessage(ctx, actorID, mid)
+	if err != nil || item == nil || item.Deleted || item.ContentType != "vocechat/file" {
+		return nil, ChatFile{}, ErrMessageUnavailable
+	}
+	var metadata indexedFileMetadata
+	if json.Unmarshal([]byte(item.MetadataJSON), &metadata) != nil || metadata.Path == "" {
+		return nil, ChatFile{}, ErrMessageUnavailable
+	}
+	actor, err := s.users.GetByID(ctx, actorID)
+	if err != nil || actor == nil || !available(*actor) {
+		return nil, ChatFile{}, ErrRecipientUnavailable
+	}
+	login, err := s.loginAndBind(ctx, *actor)
+	if err != nil {
+		return nil, ChatFile{}, err
+	}
+	started := time.Now()
+	upstream, err := s.voce.DownloadFile(ctx, login.Token, metadata.Path, thumbnail && metadata.Image)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return nil, ChatFile{}, err
+	}
+	return upstream, metadata.ChatFile, nil
+}
+
+func (s *Service) ReadUpload(reader io.Reader, declaredSize int64) ([]byte, error) {
+	maxBytes := s.policy().MaxFileBytes
+	if declaredSize > maxBytes {
+		return nil, ErrFileTooLarge
+	}
+	content, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > maxBytes {
+		return nil, ErrFileTooLarge
+	}
+	return content, nil
 }
 
 func (s *Service) Events(ctx context.Context, actorID uint, afterMID int64) (*http.Response, error) {
@@ -162,7 +464,273 @@ func (s *Service) Events(ctx context.Context, actorID uint, afterMID int64) (*ht
 	if err != nil {
 		return nil, err
 	}
-	return s.voce.Events(ctx, login.Token, afterMID)
+	started := time.Now()
+	response, err := s.voce.Events(ctx, login.Token, afterMID)
+	s.observeVoce(started, err == nil)
+	if err != nil {
+		return nil, err
+	}
+	s.activeSSE.Add(1)
+	response.Body = &trackedBody{ReadCloser: response.Body, closed: func() { s.activeSSE.Add(-1) }}
+	return response, nil
+}
+
+func (s *Service) BrowserNotificationsAllowed() bool {
+	return s.policy().BrowserNotificationsAllowed
+}
+func (s *Service) CurrentPolicy() Policy { return s.policy() }
+
+func (s *Service) Stats(ctx context.Context) RuntimeStats {
+	policy := s.policy()
+	healthy := false
+	if s.configured && s.voce != nil {
+		started := time.Now()
+		healthy = s.voce.Healthy(ctx)
+		s.observeVoce(started, healthy)
+	}
+	requests := s.voceRequests.Load()
+	latencyMS := int64(0)
+	if requests > 0 {
+		latencyMS = (s.voceLatencyNS.Load() / requests) / int64(time.Millisecond)
+	}
+	stats := RuntimeStats{
+		Configured: s.configured, Enabled: s.Enabled(), Healthy: healthy,
+		ActiveSSE: s.activeSSE.Load(), VoceRequests: requests,
+		VoceFailures: s.voceFailures.Load(), AverageLatencyMS: latencyMS, Policy: policy,
+	}
+	if s.conversations != nil {
+		stats.IndexedMessages, stats.FileBytes, _ = s.conversations.MessageStats(ctx)
+	}
+	return stats
+}
+
+func (s *Service) StartBackgroundWorkers(ctx context.Context) {
+	if s == nil || s.conversations == nil || s.voce == nil {
+		return
+	}
+	go func() {
+		s.cleanupExpired(ctx)
+		ticker := time.NewTicker(6 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.cleanupExpired(ctx)
+			}
+		}
+	}()
+}
+
+func (s *Service) cleanupExpired(ctx context.Context) {
+	retentionDays := s.policy().RetentionDays
+	if retentionDays <= 0 || !s.configured {
+		return
+	}
+	items, err := s.conversations.ListMessagesBefore(ctx, time.Now().UTC().Add(-time.Duration(retentionDays)*24*time.Hour), 100)
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		if ctx.Err() != nil {
+			return
+		}
+		sender, userErr := s.users.GetByID(ctx, item.SenderUserID)
+		if userErr != nil || sender == nil {
+			continue
+		}
+		login, loginErr := s.loginAndBind(ctx, *sender)
+		if loginErr != nil {
+			continue
+		}
+		started := time.Now()
+		_, deleteErr := s.voce.Delete(ctx, login.Token, item.MID)
+		s.observeVoce(started, deleteErr == nil)
+		if deleteErr == nil {
+			_ = s.conversations.DeleteMessage(ctx, item.SenderUserID, item.MID)
+		}
+	}
+}
+
+func (s *Service) observeVoce(started time.Time, success bool) {
+	s.voceRequests.Add(1)
+	s.voceLatencyNS.Add(time.Since(started).Nanoseconds())
+	if !success {
+		s.voceFailures.Add(1)
+	}
+}
+
+type trackedBody struct {
+	io.ReadCloser
+	once   sync.Once
+	closed func()
+}
+
+func (body *trackedBody) Close() error {
+	err := body.ReadCloser.Close()
+	body.once.Do(body.closed)
+	return err
+}
+
+func (s *Service) UnreadCount(ctx context.Context, actorID uint) int64 {
+	if s.conversations == nil {
+		return 0
+	}
+	total, err := s.conversations.TotalUnread(ctx, actorID)
+	if err != nil {
+		return 0
+	}
+	return total
+}
+
+func (s *Service) ListConversations(ctx context.Context, actorID uint, page, pageSize int) (ConversationPage, error) {
+	if !s.Enabled() {
+		return ConversationPage{}, ErrDisabled
+	}
+	actor, err := s.users.GetByID(ctx, actorID)
+	if err != nil || actor == nil || !available(*actor) {
+		return ConversationPage{}, ErrRecipientUnavailable
+	}
+	if s.conversations == nil {
+		return ConversationPage{Results: []Conversation{}}, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 30
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	states, total, totalUnread, err := s.conversations.ListConversations(ctx, actorID, (page-1)*pageSize, pageSize)
+	if err != nil {
+		return ConversationPage{}, err
+	}
+	results := make([]Conversation, 0, len(states))
+	for _, state := range states {
+		peer, peerErr := s.users.GetByID(ctx, state.PeerUserID)
+		if peerErr != nil || peer == nil || !available(*peer) {
+			continue
+		}
+		lastAt := ""
+		if !state.LastMessageAt.IsZero() {
+			lastAt = state.LastMessageAt.UTC().Format(time.RFC3339Nano)
+		}
+		results = append(results, Conversation{
+			User: toDirectoryUser(*peer), LastMessageID: state.LastMessageMID,
+			LastMessagePreview: state.LastMessagePreview, LastMessageAt: lastAt,
+			UnreadCount: state.UnreadCount, Pinned: state.Pinned, Muted: state.Muted,
+		})
+	}
+	return ConversationPage{Total: total, TotalUnread: totalUnread, Results: results, HasMore: int64(page*pageSize) < total}, nil
+}
+
+func (s *Service) MarkRead(ctx context.Context, actorID uint, recipientPublicID string, throughMID int64) error {
+	if s.conversations == nil {
+		return nil
+	}
+	actor, target, _, _, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	if err != nil {
+		return err
+	}
+	return s.conversations.MarkRead(ctx, actor.ID, target.ID, throughMID)
+}
+
+func (s *Service) SetConversationPreferences(ctx context.Context, actorID uint, recipientPublicID string, pinned, muted *bool) error {
+	if s.conversations == nil {
+		return nil
+	}
+	actor, target, _, _, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	if err != nil {
+		return err
+	}
+	return s.conversations.SetConversationPreferences(ctx, actor.ID, target.ID, pinned, muted)
+}
+
+func (s *Service) SearchMessages(ctx context.Context, actorID uint, recipientPublicID, query string, beforeMID int64, limit int) (MessagePage, error) {
+	if s.conversations == nil {
+		return MessagePage{Results: []ChatMessage{}}, nil
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return MessagePage{Results: []ChatMessage{}}, nil
+	}
+	actor, err := s.users.GetByID(ctx, actorID)
+	if err != nil || actor == nil || !available(*actor) {
+		return MessagePage{}, ErrRecipientUnavailable
+	}
+	var peer *domainuser.User
+	peerID := uint(0)
+	if recipientPublicID != "" {
+		peer, err = s.users.GetByPublicID(ctx, recipientPublicID)
+		if err != nil || peer == nil || !available(*peer) || peer.ID == actor.ID {
+			return MessagePage{}, ErrRecipientUnavailable
+		}
+		peerID = peer.ID
+	}
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	items, err := s.conversations.SearchMessages(ctx, actorID, peerID, query, beforeMID, limit+1)
+	if err != nil {
+		return MessagePage{}, err
+	}
+	hasMore := len(items) > limit
+	if hasMore {
+		items = items[:limit]
+	}
+	results := make([]ChatMessage, 0, len(items))
+	nextBefore := int64(0)
+	for _, item := range items {
+		sender, senderErr := s.users.GetByID(ctx, item.SenderUserID)
+		if senderErr != nil || sender == nil {
+			continue
+		}
+		results = append(results, indexedToChatMessage(item, sender.PublicID))
+		if nextBefore == 0 || item.MID < nextBefore {
+			nextBefore = item.MID
+		}
+	}
+	return MessagePage{Results: results, HasMore: hasMore, NextBefore: nextBefore}, nil
+}
+
+// ProcessEvent records product state from a VoceChat chat event and returns
+// the sender's opaque DEEIX public ID for the browser event envelope.
+func (s *Service) ProcessEvent(ctx context.Context, raw string) (string, error) {
+	var header struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(raw), &header); err != nil || header.Type != "chat" {
+		return "", err
+	}
+	var message vocechat.Message
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		return "", err
+	}
+	senderBinding, err := s.bindings.FindByVoceUID(ctx, message.FromUID)
+	if err != nil || senderBinding == nil {
+		return "", ErrRecipientUnavailable
+	}
+	recipientBinding, err := s.bindings.FindByVoceUID(ctx, message.Target.UID)
+	if err != nil || recipientBinding == nil {
+		return "", ErrRecipientUnavailable
+	}
+	sender, err := s.users.GetByID(ctx, senderBinding.UserID)
+	if err != nil || sender == nil || !available(*sender) {
+		return "", ErrRecipientUnavailable
+	}
+	recipient, err := s.users.GetByID(ctx, recipientBinding.UserID)
+	if err != nil || recipient == nil || !available(*recipient) {
+		return "", ErrRecipientUnavailable
+	}
+	if message.Detail.Type == "reaction" {
+		s.recordVoceMessage(ctx, message, *sender, *recipient, message.FromUID)
+		return sender.PublicID, nil
+	}
+	s.recordVoceMessage(ctx, message, *sender, *recipient, message.FromUID)
+	return sender.PublicID, nil
 }
 
 // EventSenderPublicID translates a VoceChat event sender back to the active
@@ -255,7 +823,10 @@ func (s *Service) loginExisting(ctx context.Context, user domainuser.User, bindi
 	if binding == nil || binding.SyncedName == name {
 		return login, nil
 	}
-	if err := s.voce.UpdateName(ctx, login.Token, name); err != nil {
+	started := time.Now()
+	err = s.voce.UpdateName(ctx, login.Token, name)
+	s.observeVoce(started, err == nil)
+	if err != nil {
 		// DEEIX is authoritative for presentation. Retry this optional remote
 		// profile synchronization later without blocking an otherwise valid DM.
 		return login, nil
@@ -272,7 +843,9 @@ func (s *Service) login(ctx context.Context, user domainuser.User) (vocechat.Log
 	// the loser perform a normal login after that row becomes visible.
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
+		started := time.Now()
 		login, err := s.voce.LoginAs(ctx, user.PublicID, voceName(user))
+		s.observeVoce(started, err == nil)
 		if err == nil {
 			return login, nil
 		}
@@ -290,8 +863,9 @@ func (s *Service) login(ctx context.Context, user domainuser.User) (vocechat.Log
 	}
 	return vocechat.Login{}, lastErr
 }
-func (s *Service) toMessages(items []vocechat.Message, actorUID, targetUID int64, actorPublicID, targetPublicID string) []ChatMessage {
-	results := make([]ChatMessage, 0, len(items))
+func (s *Service) toMessages(ctx context.Context, actorID uint, items []vocechat.Message, actorUID, targetUID int64, actorPublicID, targetPublicID string) []ChatMessage {
+	byMID := make(map[int64]ChatMessage, len(items))
+	order := make([]int64, 0, len(items))
 	for _, item := range items {
 		if item.Detail.Type != "normal" && item.Detail.Type != "reply" {
 			continue
@@ -300,9 +874,212 @@ func (s *Service) toMessages(items []vocechat.Message, actorUID, targetUID int64
 		if item.FromUID == actorUID {
 			from = actorPublicID
 		}
-		results = append(results, ChatMessage{ID: item.MID, FromUserPublicID: from, Content: item.Detail.Content, CreatedAt: item.CreatedAtRFC3339()})
+		contentType := item.Detail.ContentType
+		if contentType == "" {
+			contentType = "text/plain"
+		}
+		message := ChatMessage{
+			ID: item.MID, FromUserPublicID: from, ContentType: contentType,
+			Content: item.Detail.Content, ReplyToID: item.Detail.MID, CreatedAt: item.CreatedAtRFC3339(),
+		}
+		if s.conversations != nil {
+			if indexed, err := s.conversations.FindMessage(ctx, actorID, item.MID); err == nil && indexed != nil {
+				message = indexedToChatMessage(*indexed, from)
+			}
+		}
+		if contentType == "vocechat/file" {
+			if message.File == nil {
+				metadata := fileMetadataFromVoce(item)
+				message.Content = ""
+				message.File = &metadata.ChatFile
+			}
+		}
+		if _, exists := byMID[item.MID]; !exists {
+			order = append(order, item.MID)
+		}
+		byMID[item.MID] = message
+	}
+	for index := len(items) - 1; index >= 0; index-- {
+		item := items[index]
+		if item.Detail.Type != "reaction" || item.Detail.MID <= 0 {
+			continue
+		}
+		original, ok := byMID[item.Detail.MID]
+		if !ok {
+			continue
+		}
+		switch item.Detail.Reaction.Type {
+		case "edit":
+			original.Content = item.Detail.Reaction.Content
+			if item.Detail.Reaction.ContentType != "" {
+				original.ContentType = item.Detail.Reaction.ContentType
+			}
+			original.EditedAt = item.CreatedAtRFC3339()
+		case "delete":
+			original.Content = ""
+			original.File = nil
+			original.Deleted = true
+		}
+		byMID[item.Detail.MID] = original
+	}
+	results := make([]ChatMessage, 0, len(order))
+	for _, mid := range order {
+		results = append(results, byMID[mid])
 	}
 	return results
+}
+
+func (s *Service) recordVoceMessage(ctx context.Context, item vocechat.Message, first, second domainuser.User, firstVoceUID int64) {
+	sender, recipient := first, second
+	if item.FromUID != firstVoceUID {
+		sender, recipient = second, first
+	}
+	if item.Detail.Type == "reaction" {
+		if s.conversations != nil && item.Detail.MID > 0 {
+			switch item.Detail.Reaction.Type {
+			case "edit":
+				contentType := item.Detail.Reaction.ContentType
+				if contentType == "" {
+					contentType = "text/plain"
+				}
+				metadata, _ := json.Marshal(item.Detail.Reaction.Properties)
+				_ = s.conversations.EditMessage(ctx, sender.ID, item.Detail.MID, contentType, item.Detail.Reaction.Content, string(metadata))
+			case "delete":
+				_ = s.conversations.DeleteMessage(ctx, sender.ID, item.Detail.MID)
+			}
+		}
+		return
+	}
+	if item.Detail.Type != "normal" && item.Detail.Type != "reply" {
+		return
+	}
+	contentType := item.Detail.ContentType
+	if contentType == "" {
+		contentType = "text/plain"
+	}
+	sentAt := time.Now().UTC()
+	if value := item.CreatedAtRFC3339(); value != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			sentAt = parsed.UTC()
+		}
+	}
+	metadata := ""
+	fileSize := int64(0)
+	if contentType == "vocechat/file" {
+		fileMetadata := fileMetadataFromVoce(item)
+		fileSize = fileMetadata.Size
+		encoded, _ := json.Marshal(fileMetadata)
+		metadata = string(encoded)
+	}
+	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+		MID: item.MID, SenderUserID: sender.ID, RecipientUserID: recipient.ID,
+		ContentType: contentType, Content: item.Detail.Content, MetadataJSON: metadata, FileSize: fileSize,
+		ReplyToMID: item.Detail.MID, SentAt: sentAt,
+	})
+}
+
+func (s *Service) recordIndexedMessage(ctx context.Context, item domainmessaging.MessageIndex) {
+	if s.conversations == nil || item.MID <= 0 || item.SenderUserID == 0 || item.RecipientUserID == 0 {
+		return
+	}
+	_, _ = s.conversations.RecordMessage(ctx, item)
+}
+
+func indexedToChatMessage(item domainmessaging.MessageIndex, senderPublicID string) ChatMessage {
+	createdAt := ""
+	if !item.SentAt.IsZero() {
+		createdAt = item.SentAt.UTC().Format(time.RFC3339Nano)
+	}
+	editedAt := ""
+	if !item.EditedAt.IsZero() {
+		editedAt = item.EditedAt.UTC().Format(time.RFC3339Nano)
+	}
+	message := ChatMessage{
+		ID: item.MID, FromUserPublicID: senderPublicID, ContentType: item.ContentType,
+		Content: item.Content, ReplyToID: item.ReplyToMID, CreatedAt: createdAt,
+		EditedAt: editedAt, Deleted: item.Deleted,
+	}
+	if item.ContentType == "vocechat/file" && !item.Deleted {
+		var metadata indexedFileMetadata
+		if json.Unmarshal([]byte(item.MetadataJSON), &metadata) == nil {
+			message.Content = ""
+			message.File = &metadata.ChatFile
+		}
+	}
+	return message
+}
+
+func (s *Service) requireConversationMessage(ctx context.Context, actorID, peerID uint, mid int64, owned bool) error {
+	if s.conversations == nil {
+		return ErrMessageUnavailable
+	}
+	item, err := s.conversations.FindMessage(ctx, actorID, mid)
+	if err != nil || item == nil || item.Deleted {
+		return ErrMessageUnavailable
+	}
+	if owned && item.SenderUserID != actorID {
+		return ErrMessageUnavailable
+	}
+	if !((item.SenderUserID == actorID && item.RecipientUserID == peerID) || (item.SenderUserID == peerID && item.RecipientUserID == actorID)) {
+		return ErrMessageUnavailable
+	}
+	return nil
+}
+
+func (s *Service) ownedMessage(ctx context.Context, actorID uint, mid int64) (*domainmessaging.MessageIndex, *domainuser.User, vocechat.Login, error) {
+	if !s.Enabled() || s.conversations == nil {
+		return nil, nil, vocechat.Login{}, ErrDisabled
+	}
+	actor, err := s.users.GetByID(ctx, actorID)
+	if err != nil || actor == nil || !available(*actor) {
+		return nil, nil, vocechat.Login{}, ErrRecipientUnavailable
+	}
+	item, err := s.conversations.FindMessage(ctx, actorID, mid)
+	if err != nil || item == nil || item.SenderUserID != actorID {
+		return nil, nil, vocechat.Login{}, ErrMessageUnavailable
+	}
+	login, err := s.loginAndBind(ctx, *actor)
+	if err != nil {
+		return nil, nil, vocechat.Login{}, err
+	}
+	return item, actor, login, nil
+}
+
+func safeFilename(value string) string {
+	value = filepath.Base(strings.ReplaceAll(value, "\\", "/"))
+	value = strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 || r == '/' || r == '\\' {
+			return -1
+		}
+		return r
+	}, value)
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) > 180 {
+		runes = runes[:180]
+	}
+	return string(runes)
+}
+
+func fileMetadataFromVoce(item vocechat.Message) indexedFileMetadata {
+	metadata := indexedFileMetadata{Path: item.Detail.Content}
+	decode := func(key string, output interface{}) {
+		if raw, ok := item.Detail.Properties[key]; ok {
+			_ = json.Unmarshal(raw, output)
+		}
+	}
+	decode("name", &metadata.Name)
+	decode("content_type", &metadata.ContentType)
+	decode("size", &metadata.Size)
+	decode("width", &metadata.Width)
+	decode("height", &metadata.Height)
+	if metadata.Name == "" {
+		metadata.Name = "file"
+	}
+	if metadata.ContentType == "" {
+		metadata.ContentType = "application/octet-stream"
+	}
+	metadata.Image = strings.HasPrefix(metadata.ContentType, "image/")
+	return metadata
 }
 func available(user domainuser.User) bool { return user.Status == domainuser.StatusActive }
 func displayName(user domainuser.User) string {

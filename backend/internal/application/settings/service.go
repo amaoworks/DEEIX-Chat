@@ -336,14 +336,15 @@ func csvSet(raw string) map[string]struct{} {
 
 // validNamespaces 合法的 namespace 集合。
 var validNamespaces = map[string]bool{
-	"auth":    true,
-	"billing": true,
-	"chat":    true,
-	"storage": true,
-	"file":    true,
-	"extract": true,
-	"mcp":     true,
-	"circuit": true,
+	"auth":               true,
+	"billing":            true,
+	"chat":               true,
+	"storage":            true,
+	"file":               true,
+	"extract":            true,
+	"mcp":                true,
+	"circuit":            true,
+	"internal_messaging": true,
 }
 
 // IsValidNamespace 判断 namespace 是否允许被动态配置。
@@ -418,6 +419,14 @@ func validatePatchItem(item PatchItem) error {
 	}
 	value := strings.TrimSpace(item.Value)
 	switch key {
+	case "internal_messaging:enabled", "internal_messaging:browser_notifications":
+		return validateBool(value, key)
+	case "internal_messaging:max_file_bytes":
+		return validateIntMinMax(value, 1<<20, 100<<20, key)
+	case "internal_messaging:retention_days":
+		return validateIntMinMax(value, 0, 3650, key)
+	case "internal_messaging:user_quota_bytes":
+		return validateInt64MinMax(value, 0, 1<<50, key)
 	case "billing:mode":
 		switch value {
 		case "self", "period", "usage":
@@ -1146,6 +1155,21 @@ func validateInt64Min(value string, min int64, key string) error {
 	v, err := strconv.ParseInt(value, 10, 64)
 	if err != nil || v < min {
 		return fmt.Errorf("%s must be >= %d", key, min)
+	}
+	return nil
+}
+
+func validateInt64MinMax(value string, min int64, max int64, key string) error {
+	v, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || v < min || v > max {
+		return fmt.Errorf("%s must be between %d and %d", key, min, max)
+	}
+	return nil
+}
+
+func validateBool(value string, key string) error {
+	if _, err := strconv.ParseBool(value); err != nil {
+		return fmt.Errorf("%s must be bool", key)
 	}
 	return nil
 }

@@ -215,12 +215,24 @@ func NewApp() (*App, error) {
 	userRepo := userrepo.NewRepo(db)
 	userService := user.NewService(userRepo)
 	internalMessagingService := internalmessagingapp.NewService(
-		cfg.InternalMessagingEnabled,
+		cfg.InternalMessagingVoceChatURL != "" && cfg.InternalMessagingSecret != "",
 		userRepo,
 		internalmessagingrepo.NewRepo(db),
 		vocechat.New(cfg.InternalMessagingVoceChatURL, cfg.InternalMessagingSecret, time.Duration(cfg.InternalMessagingTimeoutMS)*time.Millisecond),
 	)
-	internalMessagingModule := internalmessaginghttp.NewModule(internalmessaginghttp.NewHandler(internalMessagingService))
+	internalMessagingService.SetPolicyProvider(func() internalmessagingapp.Policy {
+		snapshot := runtimeCfg.Snapshot()
+		return internalmessagingapp.Policy{
+			Enabled:                     snapshot.InternalMessagingEnabled,
+			MaxFileBytes:                snapshot.InternalMessagingMaxBytes,
+			RetentionDays:               snapshot.InternalMessagingKeepDays,
+			UserQuotaBytes:              snapshot.InternalMessagingUserQuota,
+			BrowserNotificationsAllowed: snapshot.InternalMessagingWebNotify,
+		}
+	})
+	internalMessagingHandler := internalmessaginghttp.NewHandler(internalMessagingService)
+	internalMessagingHandler.SetAuditWriter(auditService)
+	internalMessagingModule := internalmessaginghttp.NewModule(internalMessagingHandler)
 	billingRepo := billingrepo.NewRepo(db)
 	billingService := billing.NewService(billingRepo)
 	billingService.SetAuditWriter(auditService)
@@ -426,6 +438,7 @@ func NewApp() (*App, error) {
 	conversationService.StartBackgroundWorkers(backgroundCtx)
 	contentModerationService.StartBackgroundWorkers(backgroundCtx)
 	channelService.StartModelIconAssetCleanup(backgroundCtx)
+	internalMessagingService.StartBackgroundWorkers(backgroundCtx)
 
 	return &App{
 		cfg:                    runtimeCfg.Snapshot(),
