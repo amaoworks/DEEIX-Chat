@@ -223,6 +223,37 @@ func TestListUsersRejectsInactiveActor(t *testing.T) {
 	}
 }
 
+func TestLocalConversationUpdatesDoNotLoginToVoceChat(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(fmt.Sprintf("file:messaging-local-updates-%d?mode=memory&cache=shared", time.Now().UnixNano())), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+		t.Fatal(err)
+	}
+	store := internalmessagingrepo.NewRepo(db)
+	voce := &fakeVoce{}
+	service := NewService(true, fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}, store, voce)
+
+	if err = service.MarkRead(context.Background(), 1, "target", 0); err != nil {
+		t.Fatal(err)
+	}
+	pinned := true
+	if err = service.SetConversationPreferences(context.Background(), 1, "target", &pinned, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	voce.mu.Lock()
+	logins := voce.logins
+	voce.mu.Unlock()
+	if logins != 0 {
+		t.Fatalf("VoceChat logins = %d, want 0 for local conversation updates", logins)
+	}
+}
+
 func TestEventSenderPublicIDResolvesActiveDEEIXUser(t *testing.T) {
 	users := fakeUsers{items: map[uint]domainuser.User{
 		2: {ID: 2, PublicID: "sender", Username: "sender", Status: domainuser.StatusActive},

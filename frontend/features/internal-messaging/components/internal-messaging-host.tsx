@@ -432,8 +432,12 @@ export function InternalMessagingHost() {
         setNextBefore(page.nextBefore);
         if (!before) {
           const throughMID = next.reduce((maximum, item) => Math.max(maximum, item.id), 0);
-          await markInternalMessagingRead(accessToken, recipient.publicID, throughMID);
-          await loadConversations();
+          // History is ready to render. Durable read-state reconciliation is
+          // intentionally background work so cross-origin development latency
+          // does not keep the message list behind a loading indicator.
+          void markInternalMessagingRead(accessToken, recipient.publicID, throughMID)
+            .catch(() => undefined)
+            .then(() => loadConversations());
         }
       } catch {
         setError("消息暂时无法加载。");

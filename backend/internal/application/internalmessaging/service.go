@@ -631,7 +631,7 @@ func (s *Service) MarkRead(ctx context.Context, actorID uint, recipientPublicID 
 	if s.conversations == nil {
 		return nil
 	}
-	actor, target, _, _, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	actor, target, err := s.resolveParticipants(ctx, actorID, recipientPublicID)
 	if err != nil {
 		return err
 	}
@@ -642,7 +642,7 @@ func (s *Service) SetConversationPreferences(ctx context.Context, actorID uint, 
 	if s.conversations == nil {
 		return nil
 	}
-	actor, target, _, _, err := s.resolveChat(ctx, actorID, recipientPublicID)
+	actor, target, err := s.resolveParticipants(ctx, actorID, recipientPublicID)
 	if err != nil {
 		return err
 	}
@@ -752,25 +752,9 @@ func (s *Service) EventSenderPublicID(ctx context.Context, voceUID int64) (strin
 }
 
 func (s *Service) resolveChat(ctx context.Context, actorID uint, recipientPublicID string) (*domainuser.User, *domainuser.User, vocechat.Login, vocechat.Login, error) {
-	if !s.Enabled() {
-		return nil, nil, vocechat.Login{}, vocechat.Login{}, ErrDisabled
-	}
-	actor, err := s.users.GetByID(ctx, actorID)
+	actor, target, err := s.resolveParticipants(ctx, actorID, recipientPublicID)
 	if err != nil {
 		return nil, nil, vocechat.Login{}, vocechat.Login{}, err
-	}
-	if actor == nil {
-		return nil, nil, vocechat.Login{}, vocechat.Login{}, ErrRecipientUnavailable
-	}
-	target, err := s.users.GetByPublicID(ctx, recipientPublicID)
-	if err != nil {
-		return nil, nil, vocechat.Login{}, vocechat.Login{}, err
-	}
-	if target == nil {
-		return nil, nil, vocechat.Login{}, vocechat.Login{}, ErrRecipientUnavailable
-	}
-	if actor.ID == target.ID || !available(*actor) || !available(*target) {
-		return nil, nil, vocechat.Login{}, vocechat.Login{}, ErrRecipientUnavailable
 	}
 	actorLogin, err := s.loginAndBind(ctx, *actor)
 	if err != nil {
@@ -781,6 +765,30 @@ func (s *Service) resolveChat(ctx context.Context, actorID uint, recipientPublic
 		return nil, nil, vocechat.Login{}, vocechat.Login{}, err
 	}
 	return actor, target, actorLogin, targetLogin, nil
+}
+
+func (s *Service) resolveParticipants(ctx context.Context, actorID uint, recipientPublicID string) (*domainuser.User, *domainuser.User, error) {
+	if !s.Enabled() {
+		return nil, nil, ErrDisabled
+	}
+	actor, err := s.users.GetByID(ctx, actorID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if actor == nil {
+		return nil, nil, ErrRecipientUnavailable
+	}
+	target, err := s.users.GetByPublicID(ctx, recipientPublicID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if target == nil {
+		return nil, nil, ErrRecipientUnavailable
+	}
+	if actor.ID == target.ID || !available(*actor) || !available(*target) {
+		return nil, nil, ErrRecipientUnavailable
+	}
+	return actor, target, nil
 }
 
 func (s *Service) loginAndBind(ctx context.Context, user domainuser.User) (vocechat.Login, error) {
