@@ -27,9 +27,17 @@ export function listInternalMessagingConversations(accessToken: string, page = 1
   });
 }
 
-export function listInternalMessagingMessages(accessToken: string, publicID: string, before?: number) {
+export function listInternalMessagingMessages(
+  accessToken: string,
+  publicID: string,
+  before?: number,
+  signal?: AbortSignal,
+) {
   const suffix = before ? `?before=${before}` : "";
-  return authedRequest<InternalMessagingMessagePage>(`${ROOT}/users/${pathParam(publicID)}/messages${suffix}`, { accessToken });
+  return authedRequest<InternalMessagingMessagePage>(
+    `${ROOT}/users/${pathParam(publicID)}/messages${suffix}`,
+    { accessToken, signal },
+  );
 }
 
 export function sendInternalMessagingMessage(accessToken: string, publicID: string, content: string) {

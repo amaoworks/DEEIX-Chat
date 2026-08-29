@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,7 +28,13 @@ var (
 	ErrQuotaExceeded        = errors.New("file quota exceeded")
 )
 
-const MaxFileBytes int64 = 20 << 20
+const (
+	MaxFileBytes         int64 = 20 << 20
+	voceLoginCacheTTL          = 30 * time.Second
+	historyPageSize            = 50
+	historyRawFetchLimit       = 100
+	historyMaxRawPages         = 10
+)
 
 type userStore interface {
 	GetByID(context.Context, uint) (*domainuser.User, error)
@@ -43,6 +50,7 @@ type bindingStore interface {
 
 type conversationStore interface {
 	RecordMessage(context.Context, domainmessaging.MessageIndex) (bool, error)
+	RecordMessages(context.Context, []domainmessaging.MessageIndex) error
 	ListConversations(context.Context, uint, int, int) ([]domainmessaging.ConversationState, int64, int64, error)
 	TotalUnread(context.Context, uint) (int64, error)
 	MarkRead(context.Context, uint, uint, int64) error
@@ -52,6 +60,7 @@ type conversationStore interface {
 	MessageStats(context.Context) (int64, int64, error)
 	ListMessagesBefore(context.Context, time.Time, int) ([]domainmessaging.MessageIndex, error)
 	FindMessage(context.Context, uint, int64) (*domainmessaging.MessageIndex, error)
+	FindMessages(context.Context, uint, []int64) ([]domainmessaging.MessageIndex, error)
 	EditMessage(context.Context, uint, int64, string, string, string) error
 	DeleteMessage(context.Context, uint, int64) error
 }
@@ -72,17 +81,23 @@ type voceClient interface {
 }
 
 type Service struct {
-	configured       bool
-	users            userStore
-	bindings         bindingStore
-	conversations    conversationStore
-	voce             voceClient
-	provisioningLock sync.Map // map[uint]*sync.Mutex; only used for first bind
-	policyProvider   func() Policy
-	activeSSE        atomic.Int64
-	voceRequests     atomic.Int64
-	voceFailures     atomic.Int64
-	voceLatencyNS    atomic.Int64
+	configured     bool
+	users          userStore
+	bindings       bindingStore
+	conversations  conversationStore
+	voce           voceClient
+	loginLock      sync.Map // map[uint]*sync.Mutex; prevents login/provisioning stampedes
+	loginCache     sync.Map // map[uint]cachedVoceLogin; server-memory only
+	policyProvider func() Policy
+	activeSSE      atomic.Int64
+	voceRequests   atomic.Int64
+	voceFailures   atomic.Int64
+	voceLatencyNS  atomic.Int64
+}
+
+type cachedVoceLogin struct {
+	login     vocechat.Login
+	expiresAt time.Time
 }
 
 type Policy struct {
@@ -107,6 +122,10 @@ type RuntimeStats struct {
 }
 
 type DirectoryUser struct{ PublicID, Username, DisplayName, AvatarURL string }
+type PresenceUser struct {
+	PublicID string
+	Online   bool
+}
 type Page struct {
 	Total   int64
 	Results []DirectoryUser
@@ -241,23 +260,63 @@ func (s *Service) History(ctx context.Context, actorID uint, recipientPublicID s
 	if err != nil {
 		return MessagePage{}, err
 	}
-	started := time.Now()
-	messages, err := s.voce.History(ctx, actorLogin.Token, targetLogin.User.UID, before, 50)
-	s.observeVoce(started, err == nil)
-	if err != nil {
-		return MessagePage{}, err
+	messages := make([]vocechat.Message, 0, historyRawFetchLimit)
+	normalMIDs := make(map[int64]struct{}, historyPageSize+1)
+	cursor := before
+	exhausted := false
+	lastPageFull := false
+	for range historyMaxRawPages {
+		started := time.Now()
+		page, pageErr := s.voce.History(ctx, actorLogin.Token, targetLogin.User.UID, cursor, historyRawFetchLimit)
+		s.observeVoce(started, pageErr == nil)
+		if pageErr != nil {
+			s.loginCache.Delete(actor.ID)
+			return MessagePage{}, pageErr
+		}
+		messages = append(messages, page...)
+		for _, item := range page {
+			if (item.Detail.Type == "normal" || item.Detail.Type == "reply") && item.MID > 0 {
+				normalMIDs[item.MID] = struct{}{}
+			}
+		}
+		lastPageFull = len(page) == historyRawFetchLimit
+		if !lastPageFull {
+			exhausted = true
+			break
+		}
+		if len(normalMIDs) > historyPageSize {
+			break
+		}
+		nextCursor := int64(0)
+		for _, item := range page {
+			if item.MID > 0 && (nextCursor == 0 || item.MID < nextCursor) {
+				nextCursor = item.MID
+			}
+		}
+		if nextCursor == 0 || nextCursor == cursor {
+			// Do not expose a cursor that can only fetch this same raw page.
+			exhausted = true
+			break
+		}
+		cursor = nextCursor
 	}
-	for _, item := range messages {
-		s.recordVoceMessage(ctx, item, *actor, *target, actorLogin.User.UID)
-	}
+	s.recordVoceMessages(ctx, messages, *actor, *target, actorLogin.User.UID)
 	results := s.toMessages(ctx, actor.ID, messages, actorLogin.User.UID, targetLogin.User.UID, actor.PublicID, target.PublicID)
+	sort.Slice(results, func(first, second int) bool { return results[first].ID < results[second].ID })
+	hasMore := len(results) > historyPageSize || (!exhausted && lastPageFull)
+	if len(results) > historyPageSize {
+		results = results[len(results)-historyPageSize:]
+	}
 	nextBefore := int64(0)
 	for _, item := range results {
 		if nextBefore == 0 || item.ID < nextBefore {
 			nextBefore = item.ID
 		}
 	}
-	return MessagePage{Results: results, HasMore: len(messages) == 50, NextBefore: nextBefore}, nil
+	if nextBefore == 0 && cursor != before {
+		nextBefore = cursor
+	}
+	return MessagePage{Results: results, HasMore: hasMore, NextBefore: nextBefore}, nil
 }
 
 func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, content string) (ChatMessage, error) {
@@ -273,6 +332,7 @@ func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, con
 	mid, err := s.voce.Send(ctx, actorLogin.Token, targetLogin.User.UID, content)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
 	sentAt := time.Now().UTC()
@@ -299,6 +359,7 @@ func (s *Service) Reply(ctx context.Context, actorID uint, recipientPublicID str
 	mid, err := s.voce.Reply(ctx, actorLogin.Token, replyToMID, content)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
 	sentAt := time.Now().UTC()
@@ -325,6 +386,7 @@ func (s *Service) Edit(ctx context.Context, actorID uint, mid int64, content str
 	_, err = s.voce.Edit(ctx, login.Token, mid, content)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
 	if err = s.conversations.EditMessage(ctx, actor.ID, mid, item.ContentType, content, item.MetadataJSON); err != nil {
@@ -347,6 +409,7 @@ func (s *Service) Delete(ctx context.Context, actorID uint, mid int64) error {
 	_, err = s.voce.Delete(ctx, login.Token, mid)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return err
 	}
 	return s.conversations.DeleteMessage(ctx, actor.ID, mid)
@@ -384,12 +447,14 @@ func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID,
 	uploaded, err := s.voce.UploadFile(ctx, actorLogin.Token, filename, contentType, content)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
 	started = time.Now()
 	mid, err := s.voce.SendFile(ctx, actorLogin.Token, targetLogin.User.UID, uploaded.Path)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
 	file := ChatFile{Name: filename, ContentType: contentType, Size: uploaded.Size, Image: strings.HasPrefix(contentType, "image/")}
@@ -429,6 +494,7 @@ func (s *Service) DownloadFile(ctx context.Context, actorID uint, mid int64, thu
 	upstream, err := s.voce.DownloadFile(ctx, login.Token, metadata.Path, thumbnail && metadata.Image)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return nil, ChatFile{}, err
 	}
 	return upstream, metadata.ChatFile, nil
@@ -468,6 +534,7 @@ func (s *Service) Events(ctx context.Context, actorID uint, afterMID int64) (*ht
 	response, err := s.voce.Events(ctx, login.Token, afterMID)
 	s.observeVoce(started, err == nil)
 	if err != nil {
+		s.loginCache.Delete(actor.ID)
 		return nil, err
 	}
 	s.activeSSE.Add(1)
@@ -549,6 +616,8 @@ func (s *Service) cleanupExpired(ctx context.Context) {
 		s.observeVoce(started, deleteErr == nil)
 		if deleteErr == nil {
 			_ = s.conversations.DeleteMessage(ctx, item.SenderUserID, item.MID)
+		} else {
+			s.loginCache.Delete(sender.ID)
 		}
 	}
 }
@@ -733,6 +802,72 @@ func (s *Service) ProcessEvent(ctx context.Context, raw string) (string, error) 
 	return sender.PublicID, nil
 }
 
+// EventPresence maps VoceChat's multi-device aggregate presence events onto
+// opaque DEEIX identities. Voce UIDs never cross the browser boundary.
+func (s *Service) EventPresence(ctx context.Context, raw string) ([]PresenceUser, error) {
+	var event struct {
+		Type   string `json:"type"`
+		UID    int64  `json:"uid"`
+		Online bool   `json:"online"`
+		Users  []struct {
+			UID    int64 `json:"uid"`
+			Online bool  `json:"online"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal([]byte(raw), &event); err != nil {
+		return nil, err
+	}
+	states := event.Users
+	if event.Type == "users_state_changed" {
+		states = []struct {
+			UID    int64 `json:"uid"`
+			Online bool  `json:"online"`
+		}{{UID: event.UID, Online: event.Online}}
+	} else if event.Type != "users_state" {
+		return nil, ErrMessageUnavailable
+	}
+	results := make([]PresenceUser, 0, len(states))
+	for _, state := range states {
+		binding, err := s.bindings.FindByVoceUID(ctx, state.UID)
+		if err != nil || binding == nil {
+			continue
+		}
+		user, err := s.users.GetByID(ctx, binding.UserID)
+		if err != nil || user == nil || !available(*user) {
+			continue
+		}
+		results = append(results, PresenceUser{PublicID: user.PublicID, Online: state.Online})
+	}
+	return results, nil
+}
+
+// EventMessage returns the canonical, browser-safe message state after an SSE
+// event has been persisted. FindMessage enforces that the authenticated actor
+// participates in the conversation, so an upstream MID can never be used to
+// expose another user's message.
+func (s *Service) EventMessage(ctx context.Context, actorID uint, mid int64) (ChatMessage, string, error) {
+	if s.conversations == nil || mid <= 0 {
+		return ChatMessage{}, "", ErrMessageUnavailable
+	}
+	item, err := s.conversations.FindMessage(ctx, actorID, mid)
+	if err != nil || item == nil {
+		return ChatMessage{}, "", ErrMessageUnavailable
+	}
+	sender, err := s.users.GetByID(ctx, item.SenderUserID)
+	if err != nil || sender == nil || !available(*sender) {
+		return ChatMessage{}, "", ErrRecipientUnavailable
+	}
+	peerID := item.SenderUserID
+	if peerID == actorID {
+		peerID = item.RecipientUserID
+	}
+	peer, err := s.users.GetByID(ctx, peerID)
+	if err != nil || peer == nil || !available(*peer) {
+		return ChatMessage{}, "", ErrRecipientUnavailable
+	}
+	return indexedToChatMessage(*item, sender.PublicID), peer.PublicID, nil
+}
+
 // EventSenderPublicID translates a VoceChat event sender back to the active
 // DEEIX identity. The browser can then track unread messages without depending
 // on VoceChat's internal user IDs.
@@ -760,11 +895,20 @@ func (s *Service) resolveChat(ctx context.Context, actorID uint, recipientPublic
 	if err != nil {
 		return nil, nil, vocechat.Login{}, vocechat.Login{}, err
 	}
-	targetLogin, err := s.loginAndBind(ctx, *target)
+	targetLogin, err := s.resolveTargetLogin(ctx, *target)
 	if err != nil {
 		return nil, nil, vocechat.Login{}, vocechat.Login{}, err
 	}
 	return actor, target, actorLogin, targetLogin, nil
+}
+
+func (s *Service) resolveTargetLogin(ctx context.Context, target domainuser.User) (vocechat.Login, error) {
+	if s.bindings != nil {
+		if binding, err := s.bindings.FindByUserID(ctx, target.ID); err == nil && binding != nil && binding.VoceUID > 0 {
+			return vocechat.Login{User: vocechat.User{UID: binding.VoceUID}}, nil
+		}
+	}
+	return s.loginAndBind(ctx, target)
 }
 
 func (s *Service) resolveParticipants(ctx context.Context, actorID uint, recipientPublicID string) (*domainuser.User, *domainuser.User, error) {
@@ -792,25 +936,31 @@ func (s *Service) resolveParticipants(ctx context.Context, actorID uint, recipie
 }
 
 func (s *Service) loginAndBind(ctx context.Context, user domainuser.User) (vocechat.Login, error) {
-	// Existing bindings need a fresh short-lived token but no provisioning lock.
-	if s.bindings != nil {
-		if binding, err := s.bindings.FindByUserID(ctx, user.ID); err == nil {
-			return s.loginExisting(ctx, user, binding)
-		}
+	if cached, ok := s.cachedLogin(user.ID); ok {
+		return cached, nil
 	}
 
-	entry, _ := s.provisioningLock.LoadOrStore(user.ID, &sync.Mutex{})
+	entry, _ := s.loginLock.LoadOrStore(user.ID, &sync.Mutex{})
 	lock := entry.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
 
-	// A concurrent local request may have completed while this request waited.
+	if cached, ok := s.cachedLogin(user.ID); ok {
+		return cached, nil
+	}
+
+	var login vocechat.Login
+	var err error
 	if s.bindings != nil {
 		if binding, err := s.bindings.FindByUserID(ctx, user.ID); err == nil {
-			return s.loginExisting(ctx, user, binding)
+			login, err = s.loginExisting(ctx, user, binding)
+			if err == nil {
+				s.cacheLogin(user.ID, login)
+			}
+			return login, err
 		}
 	}
-	login, err := s.login(ctx, user)
+	login, err = s.login(ctx, user)
 	if err != nil {
 		return vocechat.Login{}, err
 	}
@@ -819,7 +969,31 @@ func (s *Service) loginAndBind(ctx context.Context, user domainuser.User) (vocec
 			return vocechat.Login{}, err
 		}
 	}
+	s.cacheLogin(user.ID, login)
 	return login, nil
+}
+
+func (s *Service) cachedLogin(userID uint) (vocechat.Login, bool) {
+	value, ok := s.loginCache.Load(userID)
+	if !ok {
+		return vocechat.Login{}, false
+	}
+	cached, ok := value.(cachedVoceLogin)
+	if !ok || cached.login.Token == "" || cached.login.User.UID <= 0 || time.Now().After(cached.expiresAt) {
+		s.loginCache.Delete(userID)
+		return vocechat.Login{}, false
+	}
+	return cached.login, true
+}
+
+func (s *Service) cacheLogin(userID uint, login vocechat.Login) {
+	if userID == 0 || login.Token == "" || login.User.UID <= 0 {
+		return
+	}
+	s.loginCache.Store(userID, cachedVoceLogin{
+		login:     login,
+		expiresAt: time.Now().Add(voceLoginCacheTTL),
+	})
 }
 
 func (s *Service) loginExisting(ctx context.Context, user domainuser.User, binding *domainmessaging.Binding) (vocechat.Login, error) {
@@ -874,6 +1048,24 @@ func (s *Service) login(ctx context.Context, user domainuser.User) (vocechat.Log
 func (s *Service) toMessages(ctx context.Context, actorID uint, items []vocechat.Message, actorUID, targetUID int64, actorPublicID, targetPublicID string) []ChatMessage {
 	byMID := make(map[int64]ChatMessage, len(items))
 	order := make([]int64, 0, len(items))
+	indexedByMID := make(map[int64]domainmessaging.MessageIndex, len(items))
+	if s.conversations != nil {
+		mids := make([]int64, 0, len(items))
+		seen := make(map[int64]struct{}, len(items))
+		for _, item := range items {
+			if (item.Detail.Type == "normal" || item.Detail.Type == "reply") && item.MID > 0 {
+				if _, exists := seen[item.MID]; !exists {
+					seen[item.MID] = struct{}{}
+					mids = append(mids, item.MID)
+				}
+			}
+		}
+		if indexed, err := s.conversations.FindMessages(ctx, actorID, mids); err == nil {
+			for _, item := range indexed {
+				indexedByMID[item.MID] = item
+			}
+		}
+	}
 	for _, item := range items {
 		if item.Detail.Type != "normal" && item.Detail.Type != "reply" {
 			continue
@@ -890,10 +1082,8 @@ func (s *Service) toMessages(ctx context.Context, actorID uint, items []vocechat
 			ID: item.MID, FromUserPublicID: from, ContentType: contentType,
 			Content: item.Detail.Content, ReplyToID: item.Detail.MID, CreatedAt: item.CreatedAtRFC3339(),
 		}
-		if s.conversations != nil {
-			if indexed, err := s.conversations.FindMessage(ctx, actorID, item.MID); err == nil && indexed != nil {
-				message = indexedToChatMessage(*indexed, from)
-			}
+		if indexed, exists := indexedByMID[item.MID]; exists {
+			message = indexedToChatMessage(indexed, from)
 		}
 		if contentType == "vocechat/file" {
 			if message.File == nil {
@@ -958,8 +1148,41 @@ func (s *Service) recordVoceMessage(ctx context.Context, item vocechat.Message, 
 		}
 		return
 	}
-	if item.Detail.Type != "normal" && item.Detail.Type != "reply" {
+	indexed, ok := voceMessageIndex(item, sender, recipient)
+	if !ok {
 		return
+	}
+	s.recordIndexedMessage(ctx, indexed)
+}
+
+func (s *Service) recordVoceMessages(ctx context.Context, items []vocechat.Message, first, second domainuser.User, firstVoceUID int64) {
+	if s.conversations == nil {
+		return
+	}
+	indexed := make([]domainmessaging.MessageIndex, 0, len(items))
+	for _, item := range items {
+		sender, recipient := first, second
+		if item.FromUID != firstVoceUID {
+			sender, recipient = second, first
+		}
+		if message, ok := voceMessageIndex(item, sender, recipient); ok {
+			indexed = append(indexed, message)
+		}
+	}
+	_ = s.conversations.RecordMessages(ctx, indexed)
+
+	// Apply reactions only after every normal message in the page is indexed,
+	// regardless of the ordering returned by VoceChat history.
+	for _, item := range items {
+		if item.Detail.Type == "reaction" {
+			s.recordVoceMessage(ctx, item, first, second, firstVoceUID)
+		}
+	}
+}
+
+func voceMessageIndex(item vocechat.Message, sender, recipient domainuser.User) (domainmessaging.MessageIndex, bool) {
+	if item.Detail.Type != "normal" && item.Detail.Type != "reply" {
+		return domainmessaging.MessageIndex{}, false
 	}
 	contentType := item.Detail.ContentType
 	if contentType == "" {
@@ -979,11 +1202,11 @@ func (s *Service) recordVoceMessage(ctx context.Context, item vocechat.Message, 
 		encoded, _ := json.Marshal(fileMetadata)
 		metadata = string(encoded)
 	}
-	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+	return domainmessaging.MessageIndex{
 		MID: item.MID, SenderUserID: sender.ID, RecipientUserID: recipient.ID,
 		ContentType: contentType, Content: item.Detail.Content, MetadataJSON: metadata, FileSize: fileSize,
 		ReplyToMID: item.Detail.MID, SentAt: sentAt,
-	})
+	}, true
 }
 
 func (s *Service) recordIndexedMessage(ctx context.Context, item domainmessaging.MessageIndex) {

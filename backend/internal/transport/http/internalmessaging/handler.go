@@ -357,7 +357,8 @@ func parseMID(c *gin.Context) int64 {
 // the Voce token and its query-string based SSE protocol off the browser.
 func (h *Handler) Events(c *gin.Context) {
 	after, _ := strconv.ParseInt(c.Query("after"), 10, 64)
-	upstream, err := h.service.Events(c.Request.Context(), middleware.MustUserID(c), after)
+	actorID := middleware.MustUserID(c)
+	upstream, err := h.service.Events(c.Request.Context(), actorID, after)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -371,7 +372,7 @@ func (h *Handler) Events(c *gin.Context) {
 	for {
 		line, readErr := reader.ReadString('\n')
 		if line != "" {
-			line = h.enrichEventLine(c.Request.Context(), line)
+			line = h.enrichEventLine(c.Request.Context(), actorID, line)
 			_, _ = c.Writer.WriteString(line)
 			c.Writer.Flush()
 		}
@@ -381,7 +382,7 @@ func (h *Handler) Events(c *gin.Context) {
 	}
 }
 
-func (h *Handler) enrichEventLine(ctx context.Context, line string) string {
+func (h *Handler) enrichEventLine(ctx context.Context, actorID uint, line string) string {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(trimmed, "data:") {
 		return line
@@ -391,7 +392,17 @@ func (h *Handler) enrichEventLine(ctx context.Context, line string) string {
 		Type    string `json:"type"`
 		FromUID int64  `json:"from_uid"`
 	}
-	if json.Unmarshal([]byte(raw), &header) != nil || header.Type != "chat" || header.FromUID <= 0 {
+	if json.Unmarshal([]byte(raw), &header) != nil {
+		return line
+	}
+	if header.Type == "users_state" || header.Type == "users_state_changed" {
+		presence, err := h.service.EventPresence(ctx, raw)
+		if err != nil {
+			return "data: {\"type\":\"" + header.Type + "\",\"users\":[]}\n"
+		}
+		return encodePresenceEvent(header.Type, presence)
+	}
+	if header.Type != "chat" || header.FromUID <= 0 {
 		return line
 	}
 	publicID, err := h.service.ProcessEvent(ctx, raw)
@@ -408,11 +419,53 @@ func (h *Handler) enrichEventLine(ctx context.Context, line string) string {
 	}
 	payload["fromUserPublicID"] = publicIDJSON
 	sanitizeEventForBrowser(payload)
+	if mid := canonicalEventMID(payload); mid > 0 {
+		if message, conversationPublicID, messageErr := h.service.EventMessage(ctx, actorID, mid); messageErr == nil {
+			if encodedMessage, marshalErr := json.Marshal(toMessageResponse(message)); marshalErr == nil {
+				payload["message"] = encodedMessage
+			}
+			if encodedConversation, marshalErr := json.Marshal(conversationPublicID); marshalErr == nil {
+				payload["conversationPublicID"] = encodedConversation
+			}
+		}
+	}
 	enriched, err := json.Marshal(payload)
 	if err != nil {
 		return line
 	}
 	return "data: " + string(enriched) + "\n"
+}
+
+func encodePresenceEvent(eventType string, presence []app.PresenceUser) string {
+	type browserPresence struct {
+		PublicID string `json:"publicID"`
+		Online   bool   `json:"online"`
+	}
+	users := make([]browserPresence, 0, len(presence))
+	for _, item := range presence {
+		users = append(users, browserPresence{PublicID: item.PublicID, Online: item.Online})
+	}
+	encoded, err := json.Marshal(struct {
+		Type  string            `json:"type"`
+		Users []browserPresence `json:"users"`
+	}{Type: eventType, Users: users})
+	if err != nil {
+		return "data: {\"type\":\"" + eventType + "\",\"users\":[]}\n"
+	}
+	return "data: " + string(encoded) + "\n"
+}
+
+func canonicalEventMID(payload map[string]json.RawMessage) int64 {
+	var mid int64
+	_ = json.Unmarshal(payload["mid"], &mid)
+	var detail struct {
+		Type string `json:"type"`
+		MID  int64  `json:"mid"`
+	}
+	if json.Unmarshal(payload["detail"], &detail) == nil && detail.Type == "reaction" {
+		return detail.MID
+	}
+	return mid
 }
 
 // sanitizeEventForBrowser removes VoceChat-only resource identifiers after

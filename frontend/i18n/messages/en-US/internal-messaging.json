@@ -1,0 +1,85 @@
+{
+  "title": "Internal messages",
+  "dragHint": "Drag the title bar to move the window",
+  "mobileHint": "Choose a conversation to start chatting",
+  "aria": {
+    "back": "Back to users",
+    "search": "Search messages",
+    "notificationsOn": "Disable notifications",
+    "notificationsOff": "Enable notifications",
+    "close": "Close messages",
+    "dismissError": "Dismiss error",
+    "cancelAction": "Cancel message action",
+    "attach": "Attach file",
+    "emoji": "Choose emoji",
+    "send": "Send",
+    "open": "Open internal messages",
+    "resize": "Resize chat window {direction}",
+    "pin": "Pin conversation",
+    "unpin": "Unpin conversation",
+    "mute": "Mute conversation",
+    "unmute": "Unmute conversation",
+    "imagePreview": "Image preview",
+    "closePreview": "Close image preview"
+  },
+  "errors": {
+    "directory": "The messaging service is temporarily unavailable. Please try again later.",
+    "history": "Messages could not be loaded.",
+    "olderHistory": "Earlier messages could not be loaded. Please try again.",
+    "preferences": "Conversation settings could not be saved. Please try again.",
+    "search": "Message search failed. Please try again.",
+    "edit": "The message could not be edited. Please try again.",
+    "send": "The message could not be sent. Please try again.",
+    "delete": "The message could not be recalled. Please try again.",
+    "fileSend": "The file could not be sent. Please try again.",
+    "fileDownload": "The file could not be downloaded. Please try again.",
+    "locate": "This message could not be located. Please try again later."
+  },
+  "notifications": {
+    "file": "You received a file",
+    "message": "You received a new message"
+  },
+  "presence": {
+    "online": "Online",
+    "offline": "Offline"
+  },
+  "search": {
+    "placeholder": "Search this conversation",
+    "action": "Search"
+  },
+  "messages": {
+    "loading": "Loading…",
+    "loadOlder": "Load earlier messages",
+    "newBelow": "New messages",
+    "empty": "No messages yet. Start the conversation.",
+    "renderError": "This message could not be displayed.",
+    "olderReply": "Reply to an earlier message",
+    "deleted": "Message recalled",
+    "edited": "Edited · ",
+    "copy": "Copy",
+    "reply": "Reply",
+    "edit": "Edit",
+    "delete": "Recall",
+    "confirmDelete": "Recall this message?"
+  },
+  "composer": {
+    "editing": "Edit message",
+    "replying": "Reply: {content}",
+    "file": "File",
+    "placeholder": "Type a message…",
+    "dropFile": "Drop to send this file"
+  },
+  "directory": {
+    "recent": "Recent",
+    "allUsers": "All users",
+    "searchPlaceholder": "Search users",
+    "noRecent": "No recent conversations. Start one from All users.",
+    "start": "Start a conversation",
+    "noUsers": "No users are available to chat.",
+    "loadMore": "Load more users"
+  },
+  "file": {
+    "tooLarge": "Files must be no larger than {size}.",
+    "unknownSize": "Unknown size"
+  }
+}

@@ -42,44 +42,70 @@ func (r *Repo) FindByVoceUID(ctx context.Context, voceUID int64) (*domainmessagi
 func (r *Repo) RecordMessage(ctx context.Context, item domainmessaging.MessageIndex) (bool, error) {
 	created := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		entity := model.InternalMessagingMessage{
-			MID:             item.MID,
-			SenderUserID:    item.SenderUserID,
-			RecipientUserID: item.RecipientUserID,
-			ContentType:     item.ContentType,
-			Content:         item.Content,
-			MetadataJSON:    item.MetadataJSON,
-			FileSize:        item.FileSize,
-			ReplyToMID:      item.ReplyToMID,
-			SentAt:          item.SentAt,
-		}
-		result := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "mid"}},
-			DoNothing: true,
-		}).Create(&entity)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			// A proxied SSE event can win the race against the send response. Let
-			// the sender's richer file metadata fill an otherwise empty index row
-			// without advancing conversations or unread counts a second time.
-			if item.MetadataJSON != "" {
-				return tx.Model(&model.InternalMessagingMessage{}).
-					Where("mid = ? AND (metadata_json = '' OR metadata_json = '{}')", item.MID).
-					Updates(map[string]interface{}{"metadata_json": item.MetadataJSON, "file_size": item.FileSize}).Error
-			}
-			return nil
-		}
-		created = true
-
-		preview := messagePreview(item.Content, item.ContentType)
-		if err := r.advanceConversation(tx, item.SenderUserID, item.RecipientUserID, item.MID, preview, item.SentAt, false); err != nil {
-			return err
-		}
-		return r.advanceConversation(tx, item.RecipientUserID, item.SenderUserID, item.MID, preview, item.SentAt, true)
+		var err error
+		created, err = r.recordMessage(tx, item)
+		return err
 	})
 	return created, err
+}
+
+// RecordMessages indexes one history page in a single transaction. Individual
+// conflict checks remain idempotent, while SQLite/Postgres no longer pay for a
+// transaction boundary per historical message.
+func (r *Repo) RecordMessages(ctx context.Context, items []domainmessaging.MessageIndex) error {
+	if len(items) == 0 {
+		return nil
+	}
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, item := range items {
+			if _, err := r.recordMessage(tx, item); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *Repo) recordMessage(tx *gorm.DB, item domainmessaging.MessageIndex) (bool, error) {
+	entity := model.InternalMessagingMessage{
+		MID:             item.MID,
+		SenderUserID:    item.SenderUserID,
+		RecipientUserID: item.RecipientUserID,
+		ContentType:     item.ContentType,
+		Content:         item.Content,
+		MetadataJSON:    item.MetadataJSON,
+		FileSize:        item.FileSize,
+		ReplyToMID:      item.ReplyToMID,
+		SentAt:          item.SentAt,
+	}
+	result := tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "mid"}},
+		DoNothing: true,
+	}).Create(&entity)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		// A proxied SSE event can win the race against the send response. Let
+		// the sender's richer file metadata fill an otherwise empty index row
+		// without advancing conversations or unread counts a second time.
+		if item.MetadataJSON != "" {
+			err := tx.Model(&model.InternalMessagingMessage{}).
+				Where("mid = ? AND (metadata_json = '' OR metadata_json = '{}')", item.MID).
+				Updates(map[string]interface{}{"metadata_json": item.MetadataJSON, "file_size": item.FileSize}).Error
+			return false, err
+		}
+		return false, nil
+	}
+
+	preview := messagePreview(item.Content, item.ContentType)
+	if err := r.advanceConversation(tx, item.SenderUserID, item.RecipientUserID, item.MID, preview, item.SentAt, false); err != nil {
+		return false, err
+	}
+	if err := r.advanceConversation(tx, item.RecipientUserID, item.SenderUserID, item.MID, preview, item.SentAt, true); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (r *Repo) advanceConversation(tx *gorm.DB, userID, peerUserID uint, mid int64, preview string, sentAt interface{}, incrementUnread bool) error {
@@ -257,6 +283,23 @@ func (r *Repo) FindMessage(ctx context.Context, userID uint, mid int64) (*domain
 	}
 	result := toMessageIndex(item)
 	return &result, nil
+}
+
+func (r *Repo) FindMessages(ctx context.Context, userID uint, mids []int64) ([]domainmessaging.MessageIndex, error) {
+	if len(mids) == 0 {
+		return []domainmessaging.MessageIndex{}, nil
+	}
+	var rows []model.InternalMessagingMessage
+	if err := r.db.WithContext(ctx).
+		Where("mid IN ? AND (sender_user_id = ? OR recipient_user_id = ?)", mids, userID, userID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	items := make([]domainmessaging.MessageIndex, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, toMessageIndex(row))
+	}
+	return items, nil
 }
 
 func (r *Repo) EditMessage(ctx context.Context, senderUserID uint, mid int64, contentType, content, metadataJSON string) error {

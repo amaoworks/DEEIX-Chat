@@ -95,12 +95,16 @@ func (f *fakeBindings) FindByVoceUID(_ context.Context, voceUID int64) (*domainm
 }
 
 type fakeVoce struct {
-	mu         sync.Mutex
-	logins     int
-	sentTo     int64
-	sent       string
-	deletedMID int64
-	deleteErr  error
+	mu            sync.Mutex
+	logins        int
+	sentTo        int64
+	sent          string
+	deletedMID    int64
+	deleteErr     error
+	history       []vocechat.Message
+	historyPages  map[int64][]vocechat.Message
+	historyBefore []int64
+	historyLimit  int
 }
 
 func (f *fakeVoce) Healthy(context.Context) bool { return true }
@@ -114,8 +118,15 @@ func (f *fakeVoce) LoginAs(_ context.Context, publicID, _ string) (vocechat.Logi
 	}
 	return vocechat.Login{Token: "token-" + publicID, User: vocechat.User{UID: uid}}, nil
 }
-func (f *fakeVoce) History(context.Context, string, int64, int64, int) ([]vocechat.Message, error) {
-	return nil, nil
+func (f *fakeVoce) History(_ context.Context, _ string, _ int64, before int64, limit int) ([]vocechat.Message, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.historyLimit = limit
+	f.historyBefore = append(f.historyBefore, before)
+	if f.historyPages != nil {
+		return f.historyPages[before], nil
+	}
+	return f.history, nil
 }
 func (f *fakeVoce) Send(_ context.Context, _ string, uid int64, content string) (int64, error) {
 	f.mu.Lock()
@@ -163,6 +174,31 @@ func TestSendProvisionsBothUsersAndUsesTargetVoceUID(t *testing.T) {
 	}
 }
 
+func TestSendUsesTargetBindingAndCachesActorLogin(t *testing.T) {
+	users := fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}
+	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{
+		1: {UserID: 1, UserPublicID: "actor", VoceUID: 1, SyncedName: "actor"},
+		2: {UserID: 2, UserPublicID: "target", VoceUID: 2, SyncedName: "target"},
+	}}
+	voce := &fakeVoce{}
+	service := NewService(true, users, bindings, voce)
+
+	for range 2 {
+		if _, err := service.Send(context.Background(), 1, "target", "hello"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	voce.mu.Lock()
+	logins := voce.logins
+	voce.mu.Unlock()
+	if logins != 1 {
+		t.Fatalf("VoceChat logins = %d, want one cached actor login and no target login", logins)
+	}
+}
+
 func TestSendRejectsInactiveRecipient(t *testing.T) {
 	users := fakeUsers{items: map[uint]domainuser.User{1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive}, 2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusSuspended}}}
 	service := NewService(true, users, &fakeBindings{items: map[uint]domainmessaging.Binding{}}, &fakeVoce{})
@@ -175,7 +211,8 @@ func TestSendRejectsInactiveRecipient(t *testing.T) {
 func TestInitialProvisioningIsSerialized(t *testing.T) {
 	users := fakeUsers{items: map[uint]domainuser.User{1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive}}}
 	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{}}
-	service := NewService(true, users, bindings, &fakeVoce{})
+	voce := &fakeVoce{}
+	service := NewService(true, users, bindings, voce)
 	var group sync.WaitGroup
 	for range 8 {
 		group.Add(1)
@@ -189,6 +226,12 @@ func TestInitialProvisioningIsSerialized(t *testing.T) {
 	group.Wait()
 	if len(bindings.items) != 1 {
 		t.Fatalf("bindings = %d, want 1", len(bindings.items))
+	}
+	voce.mu.Lock()
+	logins := voce.logins
+	voce.mu.Unlock()
+	if logins != 1 {
+		t.Fatalf("concurrent VoceChat logins = %d, want 1", logins)
 	}
 }
 
@@ -287,6 +330,27 @@ func TestEventSenderPublicIDRejectsInactiveDEEIXUser(t *testing.T) {
 	}
 }
 
+func TestEventPresenceMapsMultiDeviceStateToDEEIXIdentities(t *testing.T) {
+	users := fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}
+	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{
+		1: {UserID: 1, UserPublicID: "actor", VoceUID: 11},
+		2: {UserID: 2, UserPublicID: "target", VoceUID: 22},
+	}}
+	service := NewService(true, users, bindings, &fakeVoce{})
+
+	snapshot, err := service.EventPresence(context.Background(), `{"type":"users_state","users":[{"uid":11,"online":true},{"uid":22,"online":false},{"uid":999,"online":true}]}`)
+	if err != nil || len(snapshot) != 2 || snapshot[0] != (PresenceUser{PublicID: "actor", Online: true}) || snapshot[1] != (PresenceUser{PublicID: "target", Online: false}) {
+		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
+	}
+	changed, err := service.EventPresence(context.Background(), `{"type":"users_state_changed","uid":22,"online":true}`)
+	if err != nil || len(changed) != 1 || changed[0] != (PresenceUser{PublicID: "target", Online: true}) {
+		t.Fatalf("changed=%+v err=%v", changed, err)
+	}
+}
+
 func TestVoceNameRespectsVoceChatLimitWithoutChangingDirectoryName(t *testing.T) {
 	user := domainuser.User{DisplayName: "这是一个超过三十二个字符的 DEEIX 用户展示名称，需要在 VoceChat 中安全截断"}
 	if got := len([]rune(voceName(user))); got != 32 {
@@ -321,6 +385,7 @@ func TestProcessEventAppliesEditAndDeleteReactionWithoutNewUnread(t *testing.T) 
 	service := NewService(true, fakeUsers{items: map[uint]domainuser.User{
 		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
 		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+		3: {ID: 3, PublicID: "other", Username: "other", Status: domainuser.StatusActive},
 	}}, store, &fakeVoce{})
 
 	edit := `{"type":"chat","mid":11,"from_uid":1,"target":{"uid":2},"detail":{"type":"reaction","mid":10,"detail":{"type":"edit","content_type":"text/plain","content":"after"}}}`
@@ -334,6 +399,13 @@ func TestProcessEventAppliesEditAndDeleteReactionWithoutNewUnread(t *testing.T) 
 	if unread, _ := store.TotalUnread(ctx, 2); unread != 1 {
 		t.Fatalf("edit reaction changed unread to %d", unread)
 	}
+	canonical, peerPublicID, canonicalErr := service.EventMessage(ctx, 2, 10)
+	if canonicalErr != nil || canonical.Content != "after" || canonical.FromUserPublicID != "actor" || peerPublicID != "actor" {
+		t.Fatalf("canonical edited message=%+v peer=%q err=%v", canonical, peerPublicID, canonicalErr)
+	}
+	if _, _, canonicalErr = service.EventMessage(ctx, 3, 10); !errors.Is(canonicalErr, ErrMessageUnavailable) {
+		t.Fatalf("non-participant event message error=%v", canonicalErr)
+	}
 
 	deleted := `{"type":"chat","mid":12,"from_uid":1,"target":{"uid":2},"detail":{"type":"reaction","mid":10,"detail":{"type":"delete"}}}`
 	if _, err = service.ProcessEvent(ctx, deleted); err != nil {
@@ -345,6 +417,10 @@ func TestProcessEventAppliesEditAndDeleteReactionWithoutNewUnread(t *testing.T) 
 	}
 	if unread, _ := store.TotalUnread(ctx, 2); unread != 0 {
 		t.Fatalf("delete reaction left unread=%d", unread)
+	}
+	canonical, peerPublicID, canonicalErr = service.EventMessage(ctx, 1, 10)
+	if canonicalErr != nil || !canonical.Deleted || canonical.Content != "" || peerPublicID != "target" {
+		t.Fatalf("canonical deleted message=%+v peer=%q err=%v", canonical, peerPublicID, canonicalErr)
 	}
 }
 
@@ -473,5 +549,137 @@ func TestToMessagesDeduplicatesMIDUsingLatestMessage(t *testing.T) {
 	}
 	if items[0].ID != 321 || items[0].Content != "latest" {
 		t.Fatalf("message = %+v, want latest MID 321", items[0])
+	}
+}
+
+func TestHistoryReturnsFullCanonicalPageWhenRawHistoryContainsReactions(t *testing.T) {
+	users := fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}
+	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{
+		1: {UserID: 1, UserPublicID: "actor", VoceUID: 1, SyncedName: "actor"},
+		2: {UserID: 2, UserPublicID: "target", VoceUID: 2, SyncedName: "target"},
+	}}
+	raw := make([]vocechat.Message, 0, 52)
+	for mid := int64(1); mid <= 50; mid++ {
+		message := vocechat.Message{MID: mid, FromUID: 1}
+		message.Detail.Type = "normal"
+		message.Detail.Content = fmt.Sprintf("message-%d", mid)
+		raw = append(raw, message)
+	}
+	edit := vocechat.Message{MID: 51, FromUID: 1}
+	edit.Detail.Type = "reaction"
+	edit.Detail.MID = 50
+	edit.Detail.Reaction.Type = "edit"
+	edit.Detail.Reaction.Content = "edited-message-50"
+	deleted := vocechat.Message{MID: 52, FromUID: 1}
+	deleted.Detail.Type = "reaction"
+	deleted.Detail.MID = 49
+	deleted.Detail.Reaction.Type = "delete"
+	raw = append(raw, edit, deleted)
+	voce := &fakeVoce{history: raw}
+	service := NewService(true, users, bindings, voce)
+
+	page, err := service.History(context.Background(), 1, "target", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if voce.historyLimit != historyRawFetchLimit {
+		t.Fatalf("raw history limit = %d, want %d", voce.historyLimit, historyRawFetchLimit)
+	}
+	if len(page.Results) != historyPageSize {
+		t.Fatalf("canonical history count = %d, want %d", len(page.Results), historyPageSize)
+	}
+	if page.Results[0].ID != 1 || page.Results[len(page.Results)-1].ID != 50 || page.NextBefore != 1 {
+		t.Fatalf("unexpected page bounds: first=%d last=%d next_before=%d", page.Results[0].ID, page.Results[len(page.Results)-1].ID, page.NextBefore)
+	}
+	if page.HasMore {
+		t.Fatal("52 raw events below the fetch limit with exactly 50 messages must not report more history")
+	}
+	if !page.Results[48].Deleted || page.Results[49].Content != "edited-message-50" {
+		t.Fatalf("reactions were not merged into canonical messages: deleted=%+v edited=%+v", page.Results[48], page.Results[49])
+	}
+}
+
+func TestHistoryTrimsCanonicalMessagesToNewestPage(t *testing.T) {
+	users := fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}
+	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{
+		1: {UserID: 1, UserPublicID: "actor", VoceUID: 1, SyncedName: "actor"},
+		2: {UserID: 2, UserPublicID: "target", VoceUID: 2, SyncedName: "target"},
+	}}
+	raw := make([]vocechat.Message, 0, 51)
+	for mid := int64(1); mid <= 51; mid++ {
+		message := vocechat.Message{MID: mid, FromUID: 1}
+		message.Detail.Type = "normal"
+		message.Detail.Content = fmt.Sprintf("message-%d", mid)
+		raw = append(raw, message)
+	}
+	service := NewService(true, users, bindings, &fakeVoce{history: raw})
+
+	page, err := service.History(context.Background(), 1, "target", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Results) != historyPageSize || page.Results[0].ID != 2 || page.Results[49].ID != 51 {
+		t.Fatalf("unexpected trimmed page: count=%d first=%d last=%d", len(page.Results), page.Results[0].ID, page.Results[49].ID)
+	}
+	if !page.HasMore || page.NextBefore != 2 {
+		t.Fatalf("pagination metadata = has_more:%v next_before:%d", page.HasMore, page.NextBefore)
+	}
+}
+
+func TestHistoryFetchesPastReactionHeavyRawPage(t *testing.T) {
+	users := fakeUsers{items: map[uint]domainuser.User{
+		1: {ID: 1, PublicID: "actor", Username: "actor", Status: domainuser.StatusActive},
+		2: {ID: 2, PublicID: "target", Username: "target", Status: domainuser.StatusActive},
+	}}
+	bindings := &fakeBindings{items: map[uint]domainmessaging.Binding{
+		1: {UserID: 1, UserPublicID: "actor", VoceUID: 1, SyncedName: "actor"},
+		2: {UserID: 2, UserPublicID: "target", VoceUID: 2, SyncedName: "target"},
+	}}
+	latest := make([]vocechat.Message, 0, historyRawFetchLimit)
+	for mid := int64(151); mid >= 101; mid-- {
+		reaction := vocechat.Message{MID: mid, FromUID: 1}
+		reaction.Detail.Type = "reaction"
+		reaction.Detail.MID = 100
+		reaction.Detail.Reaction.Type = "edit"
+		reaction.Detail.Reaction.Content = fmt.Sprintf("edited-%d", mid)
+		latest = append(latest, reaction)
+	}
+	for mid := int64(100); mid >= 52; mid-- {
+		message := vocechat.Message{MID: mid, FromUID: 1}
+		message.Detail.Type = "normal"
+		message.Detail.Content = fmt.Sprintf("message-%d", mid)
+		latest = append(latest, message)
+	}
+	earlier := make([]vocechat.Message, 0, 3)
+	for mid := int64(51); mid >= 49; mid-- {
+		message := vocechat.Message{MID: mid, FromUID: 1}
+		message.Detail.Type = "normal"
+		message.Detail.Content = fmt.Sprintf("message-%d", mid)
+		earlier = append(earlier, message)
+	}
+	voce := &fakeVoce{historyPages: map[int64][]vocechat.Message{0: latest, 52: earlier}}
+	service := NewService(true, users, bindings, voce)
+
+	page, err := service.History(context.Background(), 1, "target", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(voce.historyBefore) != 2 || voce.historyBefore[0] != 0 || voce.historyBefore[1] != 52 {
+		t.Fatalf("history cursors = %v, want [0 52]", voce.historyBefore)
+	}
+	if len(page.Results) != historyPageSize || page.Results[0].ID != 51 || page.Results[49].ID != 100 {
+		t.Fatalf("unexpected canonical page: count=%d first=%d last=%d", len(page.Results), page.Results[0].ID, page.Results[49].ID)
+	}
+	if !page.HasMore || page.NextBefore != 51 {
+		t.Fatalf("pagination metadata = has_more:%v next_before:%d", page.HasMore, page.NextBefore)
+	}
+	if page.Results[49].Content != "edited-151" {
+		t.Fatalf("latest reaction was not applied: %+v", page.Results[49])
 	}
 }

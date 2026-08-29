@@ -5,29 +5,35 @@ import {
   Bell,
   BellOff,
   Check,
+  ChevronDown,
   ChevronLeft,
   Clipboard,
   CornerUpLeft,
   Download,
   FileIcon,
   LoaderCircle,
+  Maximize2,
   MessageCircle,
   Paperclip,
   Pencil,
   Pin,
   Search,
   Send,
+  Smile,
   Trash2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { StreamdownRender } from "@/shared/components/markdown/streamdown-render";
 import {
   deleteInternalMessagingMessage,
   downloadInternalMessagingFile,
@@ -68,10 +74,22 @@ type ResizeSnapshot = {
   direction: ResizeDirection;
   bounds: WindowBounds;
 };
+type PendingMessageScroll =
+  | { mode: "bottom"; behavior: ScrollBehavior }
+  | { mode: "preserve"; scrollHeight: number; scrollTop: number };
+type CachedConversation = {
+  messages: InternalMessagingMessage[];
+  hasMore: boolean;
+  nextBefore: number;
+  storedAt: number;
+};
 type MessagingEvent = {
   type?: string;
   mid?: number;
   fromUserPublicID?: string;
+  conversationPublicID?: string;
+  message?: InternalMessagingMessage;
+  users?: Array<{ publicID: string; online: boolean }>;
   detail?: {
     type?: string;
     content?: string;
@@ -81,12 +99,35 @@ type MessagingEvent = {
   };
 };
 
+class MessageRenderBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
 const VIEWPORT_MARGIN = 8;
 const BUTTON_SIZE = 44;
 const MIN_WINDOW_WIDTH = 320;
 const MIN_WINDOW_HEIGHT = 360;
 const LAYOUT_STORAGE_PREFIX = "deeix.internal-messaging.layout.v1";
 const NOTIFICATION_STORAGE_PREFIX = "deeix.internal-messaging.notifications.v1";
+const MESSAGE_BOTTOM_THRESHOLD = 80;
+const MESSAGE_CACHE_TTL = 30_000;
+const COMMON_EMOJIS = [
+  "😀", "😃", "😄", "😁", "😂", "😊", "😍", "🥰",
+  "😘", "😎", "🤔", "😅", "😭", "😡", "🥳", "🤩",
+  "👍", "👎", "👏", "🙏", "💪", "👌", "✌️", "🤝",
+  "❤️", "💔", "🔥", "🎉", "✨", "💯", "✅", "🚀",
+];
 
 const RESIZE_HANDLES: Array<{ direction: ResizeDirection; className: string }> = [
   { direction: "n", className: "-top-1 left-3 right-3 h-2 cursor-n-resize" },
@@ -107,6 +148,16 @@ function displayName(user: InternalMessagingUser) {
   return user.displayName || user.username;
 }
 
+function safeInternalMessageMarkdown(content: string) {
+  // Internal messages use authenticated file attachments for images. Render
+  // Markdown image syntax as its alt text so a message cannot trigger a
+  // background request to an arbitrary third-party tracking URL.
+  return content
+    .replace(/!\[([^\]]*)\]\((?:\\.|[^)])*\)/g, "$1")
+    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(/<img\b[^>]*>/gi, "");
+}
+
 function mergeMessages(
   ...groups: InternalMessagingMessage[][]
 ): InternalMessagingMessage[] {
@@ -117,10 +168,10 @@ function mergeMessages(
   return [...byID.values()].sort((left, right) => left.id - right.id);
 }
 
-function formatTime(value: string) {
+function formatTime(value: string, locale: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
@@ -178,14 +229,31 @@ function isWindowBounds(value: unknown): value is WindowBounds {
   return Number.isFinite(candidate.width) && Number.isFinite(candidate.height);
 }
 
+function useMobileMessagingLayout() {
+  const [mobile, setMobile] = React.useState(false);
+
+  React.useEffect(() => {
+    const media = window.matchMedia("(max-width: 640px)");
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return mobile;
+}
+
 function useMessagingEvents(
   enabled: boolean,
   accessToken: string,
   onEvent: (event: MessagingEvent) => void,
+  onConnectionChange: (connected: boolean) => void,
 ) {
   const latestMID = React.useRef(0);
   const callback = React.useRef(onEvent);
+  const connectionCallback = React.useRef(onConnectionChange);
   callback.current = onEvent;
+  connectionCallback.current = onConnectionChange;
 
   React.useEffect(() => {
     if (!enabled || !accessToken) return;
@@ -203,6 +271,7 @@ function useMessagingEvents(
         );
         const reader = response.body?.getReader();
         if (!reader) throw new Error("event stream is unavailable");
+        connectionCallback.current(true);
         const decoder = new TextDecoder();
         let pending = "";
         while (!cancelled) {
@@ -223,7 +292,13 @@ function useMessagingEvents(
               if (typeof payload.mid === "number") {
                 latestMID.current = Math.max(latestMID.current, payload.mid);
               }
-              if (payload.type === "chat") callback.current(payload);
+              if (
+                payload.type === "chat" ||
+                payload.type === "users_state" ||
+                payload.type === "users_state_changed"
+              ) {
+                callback.current(payload);
+              }
             } catch {
               // Heartbeats and non-JSON events still indicate a live connection.
             }
@@ -232,18 +307,23 @@ function useMessagingEvents(
       } catch {
         // The next retry also covers temporary VoceChat unavailability.
       }
+      connectionCallback.current(false);
       if (!cancelled) retryTimer = setTimeout(connect, 1500);
     };
     void connect();
     return () => {
       cancelled = true;
       controller?.abort();
+      connectionCallback.current(false);
       if (retryTimer) clearTimeout(retryTimer);
     };
   }, [accessToken, enabled]);
 }
 
 export function InternalMessagingHost() {
+  const t = useTranslations("internalMessaging");
+  const locale = useLocale();
+  const mobileLayout = useMobileMessagingLayout();
   const { accessToken, user } = useAuthSession();
   const [enabled, setEnabled] = React.useState(false);
   const [maxFileBytes, setMaxFileBytes] = React.useState(20 * 1024 * 1024);
@@ -274,7 +354,16 @@ export function InternalMessagingHost() {
   const [messageSearchResults, setMessageSearchResults] = React.useState<InternalMessagingMessage[]>([]);
   const [searchingMessages, setSearchingMessages] = React.useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(false);
-  const [error, setError] = React.useState("");
+  const [directoryError, setDirectoryError] = React.useState("");
+  const [messageError, setMessageError] = React.useState("");
+  const [actionError, setActionError] = React.useState("");
+  const [newMessagesBelow, setNewMessagesBelow] = React.useState(false);
+  const [draggingFile, setDraggingFile] = React.useState(false);
+  const [previewMessage, setPreviewMessage] =
+    React.useState<InternalMessagingMessage | null>(null);
+  const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
+  const [presenceReady, setPresenceReady] = React.useState(false);
+  const [onlineByUser, setOnlineByUser] = React.useState<Record<string, boolean>>({});
   const [buttonPoint, setButtonPoint] = React.useState<Point | null>(null);
   const [windowBounds, setWindowBounds] = React.useState<WindowBounds>(initialWindowBounds);
   const selectedRef = React.useRef<InternalMessagingUser | null>(null);
@@ -284,7 +373,70 @@ export function InternalMessagingHost() {
   const suppressButtonClickRef = React.useRef(false);
   const layoutHydratedRef = React.useRef(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const messageViewportRef = React.useRef<HTMLDivElement | null>(null);
+  const messagesRef = React.useRef<InternalMessagingMessage[]>([]);
+  const nearMessageBottomRef = React.useRef(true);
+  const pendingMessageScrollRef = React.useRef<PendingMessageScroll | null>(null);
+  const messageRequestRef = React.useRef<{
+    sequence: number;
+    controller: AbortController | null;
+  }>({ sequence: 0, controller: null });
+  const conversationRefreshTimerRef = React.useRef<number | null>(null);
+  const messageRefreshTimerRef = React.useRef<number | null>(null);
+  const readRetryTimersRef = React.useRef<Set<number>>(new Set());
+  const messageCacheRef = React.useRef<Map<string, CachedConversation>>(new Map());
+  const messagePrefetchRef = React.useRef<Map<string, Promise<void>>>(new Map());
   selectedRef.current = selected;
+  messagesRef.current = messages;
+
+  const scrollToMessageBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
+    const viewport = messageViewportRef.current;
+    if (!viewport) return;
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    nearMessageBottomRef.current = true;
+    setNewMessagesBelow(false);
+  }, []);
+
+  const maintainMessageBottom = React.useCallback(() => {
+    if (nearMessageBottomRef.current) scrollToMessageBottom("auto");
+  }, [scrollToMessageBottom]);
+
+  const messageByID = React.useMemo(
+    () => new Map(messages.map((message) => [message.id, message])),
+    [messages],
+  );
+
+  React.useEffect(() => {
+    if (!selected) return;
+    messageCacheRef.current.set(selected.publicID, {
+      messages,
+      hasMore: hasMoreMessages,
+      nextBefore,
+      storedAt: Date.now(),
+    });
+  }, [hasMoreMessages, messages, nextBefore, selected]);
+
+  React.useLayoutEffect(() => {
+    const viewport = messageViewportRef.current;
+    const pending = pendingMessageScrollRef.current;
+    if (!viewport || !pending) return;
+    pendingMessageScrollRef.current = null;
+    if (pending.mode === "preserve") {
+      viewport.scrollTop =
+        pending.scrollTop + (viewport.scrollHeight - pending.scrollHeight);
+      return;
+    }
+    scrollToMessageBottom(pending.behavior);
+  }, [messages, scrollToMessageBottom]);
+
+  const handleMessageScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const viewport = event.currentTarget;
+    const distance = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
+    const nearBottom = distance <= MESSAGE_BOTTOM_THRESHOLD;
+    nearMessageBottomRef.current = nearBottom;
+    if (nearBottom) setNewMessagesBelow(false);
+  };
 
   React.useEffect(() => {
     let disposed = false;
@@ -318,6 +470,7 @@ export function InternalMessagingHost() {
     setMessages([]);
     setReplyTo(null);
     setEditing(null);
+    setPreviewMessage(null);
   }, [enabled]);
 
   React.useEffect(() => {
@@ -393,60 +546,145 @@ export function InternalMessagingHost() {
     }
   }, [accessToken, enabled]);
 
+  const scheduleConversationRefresh = React.useCallback(() => {
+    if (conversationRefreshTimerRef.current) return;
+    conversationRefreshTimerRef.current = window.setTimeout(() => {
+      conversationRefreshTimerRef.current = null;
+      void loadConversations();
+    }, 150);
+  }, [loadConversations]);
+
+  const syncReadState = React.useCallback(
+    (recipientPublicID: string, throughMID: number, attempt = 0) => {
+      void markInternalMessagingRead(accessToken, recipientPublicID, throughMID)
+        .then(() => scheduleConversationRefresh())
+        .catch(() => {
+          const delays = [500, 1500];
+          if (attempt >= delays.length) return;
+          const timer = window.setTimeout(() => {
+            readRetryTimersRef.current.delete(timer);
+            syncReadState(recipientPublicID, throughMID, attempt + 1);
+          }, delays[attempt]);
+          readRetryTimersRef.current.add(timer);
+        });
+    },
+    [accessToken, scheduleConversationRefresh],
+  );
+
   const loadUsers = React.useCallback(
     async (page = 1, append = false) => {
       if (!enabled) return;
       setLoadingUsers(true);
-      setError("");
+      setDirectoryError("");
       try {
         const result = await listInternalMessagingUsers(accessToken, query, page);
         setUsers((items) => (append ? [...items, ...result.results] : result.results));
         setDirectoryPage(page);
         setHasMoreUsers(result.hasMore);
       } catch {
-        setError("聊天服务暂不可用，请稍后重试。");
+        setDirectoryError(t("errors.directory"));
       } finally {
         setLoadingUsers(false);
       }
     },
-    [accessToken, enabled, query],
+    [accessToken, enabled, query, t],
   );
 
   const loadMessages = React.useCallback(
     async (recipient: InternalMessagingUser, before = 0) => {
-      if (before) setLoadingOlderMessages(true);
-      else setLoadingMessages(true);
-      setError("");
+      messageRequestRef.current.controller?.abort();
+      const controller = new AbortController();
+      const sequence = messageRequestRef.current.sequence + 1;
+      messageRequestRef.current = { sequence, controller };
+      setLoadingMessages(!before);
+      setLoadingOlderMessages(Boolean(before));
+      if (before) setActionError("");
+      else setMessageError("");
       try {
         const page = await listInternalMessagingMessages(
           accessToken,
           recipient.publicID,
           before || undefined,
+          controller.signal,
         );
+        if (
+          sequence !== messageRequestRef.current.sequence ||
+          selectedRef.current?.publicID !== recipient.publicID
+        ) {
+          return;
+        }
         const next = mergeMessages(page.results);
-        setMessages((current) => {
-          if (!before) return next;
-          return mergeMessages(next, current);
-        });
+        const previous = messagesRef.current;
+        const viewport = messageViewportRef.current;
+        if (before && viewport) {
+          pendingMessageScrollRef.current = {
+            mode: "preserve",
+            scrollHeight: viewport.scrollHeight,
+            scrollTop: viewport.scrollTop,
+          };
+        } else if (!before) {
+          if (previous.length === 0 || nearMessageBottomRef.current) {
+            pendingMessageScrollRef.current = { mode: "bottom", behavior: "auto" };
+          } else {
+            const previousMID = previous.reduce(
+              (maximum, item) => Math.max(maximum, item.id),
+              0,
+            );
+            const nextMID = next.reduce((maximum, item) => Math.max(maximum, item.id), 0);
+            if (nextMID > previousMID) setNewMessagesBelow(true);
+          }
+        }
+        const merged = before ? mergeMessages(next, previous) : next;
+        setMessages(merged);
         setHasMoreMessages(page.hasMore);
         setNextBefore(page.nextBefore);
+        messageCacheRef.current.set(recipient.publicID, {
+          messages: merged,
+          hasMore: page.hasMore,
+          nextBefore: page.nextBefore,
+          storedAt: Date.now(),
+        });
         if (!before) {
           const throughMID = next.reduce((maximum, item) => Math.max(maximum, item.id), 0);
           // History is ready to render. Durable read-state reconciliation is
           // intentionally background work so cross-origin development latency
           // does not keep the message list behind a loading indicator.
-          void markInternalMessagingRead(accessToken, recipient.publicID, throughMID)
-            .catch(() => undefined)
-            .then(() => loadConversations());
+          syncReadState(recipient.publicID, throughMID);
         }
       } catch {
-        setError("消息暂时无法加载。");
+        if (controller.signal.aborted || sequence !== messageRequestRef.current.sequence) return;
+        if (before) setActionError(t("errors.olderHistory"));
+        else setMessageError(t("errors.history"));
       } finally {
-        if (before) setLoadingOlderMessages(false);
-        else setLoadingMessages(false);
+        if (sequence === messageRequestRef.current.sequence) {
+          messageRequestRef.current.controller = null;
+          setLoadingMessages(false);
+          setLoadingOlderMessages(false);
+        }
       }
     },
-    [accessToken, loadConversations],
+    [accessToken, syncReadState, t],
+  );
+
+  const prefetchMessages = React.useCallback(
+    (recipient: InternalMessagingUser) => {
+      const cached = messageCacheRef.current.get(recipient.publicID);
+      if (cached && Date.now() - cached.storedAt < MESSAGE_CACHE_TTL) return;
+      if (messagePrefetchRef.current.has(recipient.publicID)) return;
+      const request = listInternalMessagingMessages(accessToken, recipient.publicID)
+        .then((page) => {
+          messageCacheRef.current.set(recipient.publicID, {
+            messages: mergeMessages(page.results),
+            hasMore: page.hasMore,
+            nextBefore: page.nextBefore,
+            storedAt: Date.now(),
+          });
+        })
+        .catch(() => undefined)
+        .finally(() => messagePrefetchRef.current.delete(recipient.publicID));
+      messagePrefetchRef.current.set(recipient.publicID, request);
+    },
+    [accessToken],
   );
 
   React.useEffect(() => {
@@ -468,65 +706,129 @@ export function InternalMessagingHost() {
   React.useEffect(() => {
     if (open && selected) void loadMessages(selected);
   }, [loadMessages, open, selected]);
+  React.useEffect(
+    () => () => {
+      messageRequestRef.current.controller?.abort();
+      if (conversationRefreshTimerRef.current) {
+        window.clearTimeout(conversationRefreshTimerRef.current);
+      }
+      if (messageRefreshTimerRef.current) window.clearTimeout(messageRefreshTimerRef.current);
+      for (const timer of readRetryTimersRef.current) window.clearTimeout(timer);
+      readRetryTimersRef.current.clear();
+    },
+    [],
+  );
 
   useMessagingEvents(enabled, accessToken, (event) => {
+    if (event.type === "users_state" || event.type === "users_state_changed") {
+      const states = event.users || [];
+      setOnlineByUser((current) => {
+        if (event.type === "users_state") {
+          return Object.fromEntries(states.map((item) => [item.publicID, item.online]));
+        }
+        const updated = { ...current };
+        for (const item of states) updated[item.publicID] = item.online;
+        return updated;
+      });
+      setPresenceReady(true);
+      return;
+    }
     const senderPublicID = event.fromUserPublicID;
     if (!senderPublicID) return;
     const recipient = selectedRef.current;
-    if (event.detail?.type === "reaction") {
-      if (open && recipient) void loadMessages(recipient);
-      void loadConversations();
+    const peerPublicID = event.conversationPublicID;
+    const canonical = event.message;
+    const reaction = event.detail?.type === "reaction";
+    const incoming = senderPublicID !== user?.publicID;
+    const selectedConversation = Boolean(
+      open && recipient && peerPublicID && recipient.publicID === peerPublicID,
+    );
+
+    if (canonical && peerPublicID) {
+      if (selectedConversation) {
+        const previousMaximum = messagesRef.current.reduce(
+          (maximum, item) => Math.max(maximum, item.id),
+          0,
+        );
+        if (!reaction && canonical.id > previousMaximum) {
+          if (nearMessageBottomRef.current) {
+            pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
+          } else if (incoming) {
+            setNewMessagesBelow(true);
+          }
+        }
+        setMessages((current) => mergeMessages(current, [canonical]));
+        if (incoming) syncReadState(peerPublicID, canonical.id);
+      } else if (incoming && !reaction) {
+        setUnreadByUser((current) => ({
+          ...current,
+          [peerPublicID]: Math.min(99, (current[peerPublicID] || 0) + 1),
+        }));
+        setTotalUnread((current) => current + 1);
+      }
+      scheduleConversationRefresh();
+    } else {
+      // Older servers or a transient indexing failure may omit canonical data.
+      // Merge an event storm into one bounded history/conversation refresh.
+      if (open && recipient && !messageRefreshTimerRef.current) {
+        messageRefreshTimerRef.current = window.setTimeout(() => {
+          messageRefreshTimerRef.current = null;
+          const currentRecipient = selectedRef.current;
+          if (currentRecipient) void loadMessages(currentRecipient);
+        }, 150);
+      }
+      scheduleConversationRefresh();
       return;
     }
-    if (senderPublicID === user?.publicID) {
-      if (open && recipient) void loadMessages(recipient);
-      void loadConversations();
-      return;
-    }
-    if (open && recipient?.publicID === senderPublicID) {
-      void loadMessages(recipient);
-      return;
-    }
-    setUnreadByUser((current) => ({
-      ...current,
-      [senderPublicID]: Math.min(99, (current[senderPublicID] || 0) + 1),
-    }));
-    setTotalUnread((current) => current + 1);
+
+    if (!incoming || reaction || selectedConversation) return;
 
     const previousConversation = conversations.find(
-      (item) => item.user.publicID === senderPublicID,
+      (item) => item.user.publicID === peerPublicID,
     );
-    void loadConversations().then((snapshot) => {
-      // The refreshed conversation is now first-page recent state, so its mute
-      // preference is authoritative even for the first message after a long
-      // inactive period. Suppress notifications if that refresh failed rather
-      // than risking a muted conversation leaking a desktop alert.
-      if (!snapshot) return;
-      const conversation =
-        snapshot.results.find((item) => item.user.publicID === senderPublicID) ||
-        previousConversation;
-      const sender =
-        conversation?.user || users.find((item) => item.publicID === senderPublicID);
-      if (
-        notificationsEnabled &&
-        !conversation?.muted &&
-        document.visibilityState !== "visible" &&
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        new Notification(sender ? displayName(sender) : "DEEIX 站内消息", {
-          body:
-            event.detail?.content_type === "vocechat/file"
-              ? "你收到一个文件"
-              : event.detail?.content || "你收到了一条新消息",
-        });
-      }
-    });
+    // A missing durable preference is treated as muted. This avoids leaking a
+    // notification for the first event of an unknown/muted conversation while
+    // the already-debounced conversation refresh catches up.
+    if (!previousConversation || previousConversation.muted) return;
+    const sender =
+      previousConversation.user || users.find((item) => item.publicID === peerPublicID);
+    if (
+      notificationsEnabled &&
+      document.visibilityState !== "visible" &&
+      "Notification" in window &&
+      Notification.permission === "granted"
+    ) {
+      new Notification(sender ? displayName(sender) : t("title"), {
+        body:
+          event.detail?.content_type === "vocechat/file"
+            ? t("notifications.file")
+            : event.detail?.content || t("notifications.message"),
+      });
+    }
+  }, (connected) => {
+    if (!connected) setPresenceReady(false);
   });
 
   const selectUser = (next: InternalMessagingUser) => {
+    messageRequestRef.current.controller?.abort();
+    messageRequestRef.current = {
+      sequence: messageRequestRef.current.sequence + 1,
+      controller: null,
+    };
+    const cached = messageCacheRef.current.get(next.publicID);
     setSelected(next);
-    setMessages([]);
+    setMessages(cached?.messages || []);
+    setHasMoreMessages(cached?.hasMore || false);
+    setNextBefore(cached?.nextBefore || 0);
+    setLoadingMessages(false);
+    setLoadingOlderMessages(false);
+    setMessageError("");
+    setActionError("");
+    setNewMessagesBelow(false);
+    nearMessageBottomRef.current = true;
+    pendingMessageScrollRef.current = cached
+      ? { mode: "bottom", behavior: "auto" }
+      : null;
     setMessageSearchOpen(false);
     setMessageSearchQuery("");
     setMessageSearchResults([]);
@@ -559,6 +861,7 @@ export function InternalMessagingHost() {
     conversation: InternalMessagingConversation,
     preferences: { pinned?: boolean; muted?: boolean },
   ) => {
+    setActionError("");
     try {
       await updateInternalMessagingPreferences(
         accessToken,
@@ -567,58 +870,83 @@ export function InternalMessagingHost() {
       );
       await loadConversations();
     } catch {
-      setError("会话设置保存失败，请重试。");
+      setActionError(t("errors.preferences"));
     }
   };
 
   const searchMessages = async () => {
     if (!selected || !messageSearchQuery.trim()) return;
+    const recipientPublicID = selected.publicID;
+    const searchQuery = messageSearchQuery.trim();
     setSearchingMessages(true);
+    setActionError("");
     try {
       const result = await searchInternalMessagingMessages(
         accessToken,
-        messageSearchQuery.trim(),
-        selected.publicID,
+        searchQuery,
+        recipientPublicID,
       );
+      if (selectedRef.current?.publicID !== recipientPublicID) return;
       setMessageSearchResults(mergeMessages(result.results));
     } catch {
-      setError("消息搜索失败，请重试。");
+      if (selectedRef.current?.publicID === recipientPublicID) {
+        setActionError(t("errors.search"));
+      }
     } finally {
       setSearchingMessages(false);
     }
   };
 
   const close = () => {
+    messageRequestRef.current.controller?.abort();
+    messageRequestRef.current = {
+      sequence: messageRequestRef.current.sequence + 1,
+      controller: null,
+    };
     setOpen(false);
     setSelected(null);
     setMessageSearchOpen(false);
     setReplyTo(null);
     setEditing(null);
+    setMessageError("");
+    setActionError("");
+    setNewMessagesBelow(false);
+    nearMessageBottomRef.current = true;
+    pendingMessageScrollRef.current = null;
   };
 
   const send = async () => {
     if (!selected || !draft.trim() || sending) return;
+    const recipientPublicID = selected.publicID;
     const content = draft.trim();
     setSending(true);
     setDraft("");
+    setActionError("");
     try {
       if (editing) {
         const message = await editInternalMessagingMessage(accessToken, editing.id, content);
-        setMessages((items) =>
-          mergeMessages(items.map((item) => (item.id === message.id ? message : item))),
-        );
-        setEditing(null);
+        if (selectedRef.current?.publicID === recipientPublicID) {
+          setMessages((items) =>
+            mergeMessages(items.map((item) => (item.id === message.id ? message : item))),
+          );
+          setEditing(null);
+        }
       } else {
         const message = replyTo
-          ? await replyInternalMessagingMessage(accessToken, selected.publicID, replyTo.id, content)
-          : await sendInternalMessagingMessage(accessToken, selected.publicID, content);
-        setMessages((items) => mergeMessages(items, [message]));
-        setReplyTo(null);
+          ? await replyInternalMessagingMessage(accessToken, recipientPublicID, replyTo.id, content)
+          : await sendInternalMessagingMessage(accessToken, recipientPublicID, content);
+        if (selectedRef.current?.publicID === recipientPublicID) {
+          pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
+          setMessages((items) => mergeMessages(items, [message]));
+          setReplyTo(null);
+        }
       }
       void loadConversations();
     } catch {
-      setDraft(content);
-      setError(editing ? "消息编辑失败，请重试。" : "消息发送失败，请重试。");
+      if (selectedRef.current?.publicID === recipientPublicID) {
+        setDraft(content);
+        setActionError(editing ? t("errors.edit") : t("errors.send"));
+      }
     } finally {
       setSending(false);
     }
@@ -631,9 +959,12 @@ export function InternalMessagingHost() {
   };
 
   const removeMessage = async (message: InternalMessagingMessage) => {
-    if (!window.confirm("确定撤回这条消息吗？")) return;
+    if (!window.confirm(t("messages.confirmDelete"))) return;
+    const recipientPublicID = selected?.publicID;
+    setActionError("");
     try {
       await deleteInternalMessagingMessage(accessToken, message.id);
+      if (selectedRef.current?.publicID !== recipientPublicID) return;
       setMessages((items) =>
         mergeMessages(
           items.map((item) =>
@@ -649,39 +980,89 @@ export function InternalMessagingHost() {
       }
       void loadConversations();
     } catch {
-      setError("消息撤回失败，请重试。");
+      if (selectedRef.current?.publicID === recipientPublicID) {
+        setActionError(t("errors.delete"));
+      }
     }
   };
 
   const uploadFile = async (file: File) => {
     if (!selected || uploading) return;
+    const recipientPublicID = selected.publicID;
     if (file.size > maxFileBytes) {
-      setError(`单个文件不能超过 ${formatFileSize(maxFileBytes)}。`);
+      setActionError(
+        t("file.tooLarge", {
+          size: formatFileSize(maxFileBytes, locale, t("file.unknownSize")),
+        }),
+      );
       return;
     }
     setUploading(true);
-    setError("");
+    setActionError("");
     try {
-      const message = await sendInternalMessagingFile(accessToken, selected.publicID, file);
-      setMessages((items) => mergeMessages(items, [message]));
+      const message = await sendInternalMessagingFile(accessToken, recipientPublicID, file);
+      if (selectedRef.current?.publicID === recipientPublicID) {
+        pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
+        setMessages((items) => mergeMessages(items, [message]));
+      }
       void loadConversations();
     } catch {
-      setError("文件发送失败，请重试。");
+      if (selectedRef.current?.publicID === recipientPublicID) {
+        setActionError(t("errors.fileSend"));
+      }
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
+  const pasteFile = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (editing || uploading) return;
+    const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+    if (!image) return;
+    event.preventDefault();
+    void uploadFile(image);
+  };
+
+  const dropFile = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDraggingFile(false);
+    if (editing || uploading) return;
+    const file = event.dataTransfer.files[0];
+    if (file) void uploadFile(file);
+  };
+
+  const insertEmoji = (emoji: string) => {
+    const composer = composerRef.current;
+    const start = composer?.selectionStart ?? draft.length;
+    const end = composer?.selectionEnd ?? draft.length;
+    const next = `${draft.slice(0, start)}${emoji}${draft.slice(end)}`;
+    setDraft(next);
+    setEmojiPickerOpen(false);
+    window.setTimeout(() => {
+      composer?.focus();
+      composer?.setSelectionRange(start + emoji.length, start + emoji.length);
+    });
+  };
+
   const focusSearchResult = async (result: InternalMessagingMessage) => {
     let merged = messages;
     if (!messages.some((item) => item.id === result.id) && selected) {
+      const recipientPublicID = selected.publicID;
+      setActionError("");
       try {
-        const page = await listInternalMessagingMessages(accessToken, selected.publicID, result.id + 1);
+        const page = await listInternalMessagingMessages(
+          accessToken,
+          recipientPublicID,
+          result.id + 1,
+        );
+        if (selectedRef.current?.publicID !== recipientPublicID) return;
         merged = mergeMessages(page.results, messages);
         setMessages(merged);
       } catch {
-        setError("无法定位这条消息，请稍后重试。");
+        if (selectedRef.current?.publicID === recipientPublicID) {
+          setActionError(t("errors.locate"));
+        }
         return;
       }
     }
@@ -695,7 +1076,7 @@ export function InternalMessagingHost() {
   };
 
   const startButtonDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0) return;
+    if (mobileLayout || event.button !== 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
     buttonDragRef.current = {
       pointerID: event.pointerId,
@@ -735,7 +1116,13 @@ export function InternalMessagingHost() {
   };
 
   const startWindowDrag = (event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    if (
+      mobileLayout ||
+      event.button !== 0 ||
+      (event.target as HTMLElement).closest("button")
+    ) {
+      return;
+    }
     windowDragRef.current = {
       pointerID: event.pointerId,
       startX: event.clientX,
@@ -838,16 +1225,28 @@ export function InternalMessagingHost() {
     <>
       {open ? (
         <aside
-          className="fixed z-[70] flex min-h-0 flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl"
-          style={{
-            left: windowBounds.x,
-            top: windowBounds.y,
-            width: windowBounds.width,
-            height: windowBounds.height,
-          }}
+          className={cn(
+            "fixed z-[70] flex min-h-0 flex-col overflow-hidden bg-background shadow-2xl overscroll-contain",
+            mobileLayout ? "inset-0 rounded-none border-0" : "rounded-2xl border",
+          )}
+          style={
+            mobileLayout
+              ? { width: "100%", height: "100dvh" }
+              : {
+                  left: windowBounds.x,
+                  top: windowBounds.y,
+                  width: windowBounds.width,
+                  height: windowBounds.height,
+                }
+          }
         >
           <header
-            className="flex h-14 shrink-0 cursor-move touch-none select-none items-center gap-2 border-b px-3"
+            className={cn(
+              "flex min-h-14 shrink-0 select-none items-center gap-2 border-b px-3",
+              mobileLayout
+                ? "cursor-default touch-auto pt-[env(safe-area-inset-top)]"
+                : "h-14 cursor-move touch-none",
+            )}
             onPointerDown={startWindowDrag}
             onPointerMove={moveWindow}
             onPointerUp={stopWindowDrag}
@@ -855,7 +1254,7 @@ export function InternalMessagingHost() {
           >
             {selected ? (
               <Button
-                aria-label="Back to users"
+                aria-label={t("aria.back")}
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => setSelected(null)}
@@ -867,15 +1266,19 @@ export function InternalMessagingHost() {
             )}
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold">
-                {selected ? displayName(selected) : "站内消息"}
+                {selected ? displayName(selected) : t("title")}
               </p>
               <p className="truncate text-[11px] text-muted-foreground">
-                {selected ? selected.username : "拖动标题栏移动窗口"}
+                {selected
+                  ? presenceReady
+                    ? `${selected.username} · ${t(onlineByUser[selected.publicID] ? "presence.online" : "presence.offline")}`
+                    : selected.username
+                  : t(mobileLayout ? "mobileHint" : "dragHint")}
               </p>
             </div>
             {selected ? (
               <Button
-                aria-label="Search messages"
+                aria-label={t("aria.search")}
                 variant="ghost"
                 size="icon-sm"
                 onClick={() => setMessageSearchOpen((current) => !current)}
@@ -884,7 +1287,9 @@ export function InternalMessagingHost() {
               </Button>
             ) : null}
             <Button
-              aria-label={notificationsEnabled ? "Disable notifications" : "Enable notifications"}
+              aria-label={
+                notificationsEnabled ? t("aria.notificationsOn") : t("aria.notificationsOff")
+              }
               variant="ghost"
               size="icon-sm"
               disabled={!browserNotificationsAllowed}
@@ -892,13 +1297,47 @@ export function InternalMessagingHost() {
             >
               {notificationsEnabled ? <Bell /> : <BellOff />}
             </Button>
-            <Button aria-label="Close messages" variant="ghost" size="icon-sm" onClick={close}>
+            <Button aria-label={t("aria.close")} variant="ghost" size="icon-sm" onClick={close}>
               <X />
             </Button>
           </header>
 
+          {actionError ? (
+            <div
+              role="alert"
+              className="flex shrink-0 items-center gap-2 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+            >
+              <span className="min-w-0 flex-1">{actionError}</span>
+              <button
+                type="button"
+                aria-label={t("aria.dismissError")}
+                className="rounded p-0.5 hover:bg-destructive/10"
+                onClick={() => setActionError("")}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ) : null}
+
           {selected ? (
-            <div className="flex min-h-0 flex-1 flex-col">
+            <div
+              className="relative flex min-h-0 flex-1 flex-col"
+              onDragEnter={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                setDraggingFile(true);
+              }}
+              onDragOver={(event) => {
+                if (!event.dataTransfer.types.includes("Files")) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "copy";
+              }}
+              onDragLeave={(event) => {
+                if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+                setDraggingFile(false);
+              }}
+              onDrop={dropFile}
+            >
               {messageSearchOpen ? (
                 <div className="border-b p-2">
                   <div className="flex gap-2">
@@ -908,14 +1347,18 @@ export function InternalMessagingHost() {
                       onKeyDown={(event) => {
                         if (event.key === "Enter") void searchMessages();
                       }}
-                      placeholder="搜索当前会话"
+                      placeholder={t("search.placeholder")}
                     />
                     <Button
                       size="sm"
                       disabled={!messageSearchQuery.trim() || searchingMessages}
                       onClick={() => void searchMessages()}
                     >
-                      {searchingMessages ? <LoaderCircle className="animate-spin" /> : "搜索"}
+                      {searchingMessages ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        t("search.action")
+                      )}
                     </Button>
                   </div>
                   {messageSearchResults.length > 0 ? (
@@ -934,7 +1377,19 @@ export function InternalMessagingHost() {
                   ) : null}
                 </div>
               ) : null}
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+              <div
+                ref={messageViewportRef}
+                className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3 overscroll-contain"
+                onScroll={handleMessageScroll}
+              >
+                {messageError && messages.length > 0 ? (
+                  <p
+                    role="alert"
+                    className="rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+                  >
+                    {messageError}
+                  </p>
+                ) : null}
                 {hasMoreMessages ? (
                   <Button
                     variant="ghost"
@@ -943,15 +1398,13 @@ export function InternalMessagingHost() {
                     disabled={loadingOlderMessages}
                     onClick={() => void loadMessages(selected, nextBefore)}
                   >
-                    {loadingOlderMessages ? "加载中…" : "加载更早消息"}
+                    {loadingOlderMessages ? t("messages.loading") : t("messages.loadOlder")}
                   </Button>
                 ) : null}
-                {loadingMessages ? (
+                {loadingMessages && messages.length === 0 ? (
                   <Loading />
-                ) : error ? (
-                  <Empty label={error} />
                 ) : messages.length === 0 ? (
-                  <Empty label="还没有消息，发起第一句吧。" />
+                  <Empty label={messageError || t("messages.empty")} />
                 ) : (
                   messages.map((message) => {
                     const mine = message.fromUserPublicID === user.publicID;
@@ -960,6 +1413,7 @@ export function InternalMessagingHost() {
                         key={message.id}
                         id={`internal-message-${message.id}`}
                         className={cn("flex", mine ? "justify-end" : "justify-start")}
+                        style={{ contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
                       >
                         <div
                           className={cn(
@@ -974,52 +1428,70 @@ export function InternalMessagingHost() {
                                 mine ? "border-primary-foreground/50" : "border-foreground/30",
                               )}
                             >
-                              {messages.find((item) => item.id === message.replyToID)?.content ||
-                                "回复较早的消息"}
+                              {messageByID.get(message.replyToID)?.content ||
+                                t("messages.olderReply")}
                             </div>
                           ) : null}
-                          {message.deleted ? (
-                            <p className="italic opacity-70">消息已撤回</p>
-                          ) : message.file ? (
-                            <MessageFile
-                              accessToken={accessToken}
-                              message={message}
-                              onError={() => setError("文件下载失败，请重试。")}
-                            />
-                          ) : (
-                            <p className="whitespace-pre-wrap break-words">{message.content}</p>
-                          )}
+                          <MessageRenderBoundary
+                            key={`${message.id}:${message.editedAt}:${message.deleted}`}
+                            fallback={
+                              <p className="italic opacity-70">{t("messages.renderError")}</p>
+                            }
+                          >
+                            {message.deleted ? (
+                              <p className="italic opacity-70">{t("messages.deleted")}</p>
+                            ) : message.file ? (
+                              <MessageFile
+                                accessToken={accessToken}
+                                message={message}
+                                onError={() => setActionError(t("errors.fileDownload"))}
+                                onContentResize={maintainMessageBottom}
+                                onPreview={() => setPreviewMessage(message)}
+                              />
+                            ) : (
+                              <StreamdownRender
+                                content={safeInternalMessageMarkdown(message.content)}
+                                streaming={false}
+                                variant="user"
+                                className={cn(
+                                  "break-words text-sm [&_a]:underline [&_a]:underline-offset-2 [&_p]:my-0",
+                                  mine &&
+                                    "text-primary-foreground [&_a]:text-primary-foreground",
+                                )}
+                              />
+                            )}
+                          </MessageRenderBoundary>
                           <p
                             className={cn(
                               "mt-1 text-[10px]",
                               mine ? "text-primary-foreground/70" : "text-muted-foreground",
                             )}
                           >
-                            {message.editedAt ? "已编辑 · " : ""}
-                            {formatTime(message.createdAt)}
+                            {message.editedAt ? t("messages.edited") : ""}
+                            {formatTime(message.createdAt, locale)}
                           </p>
                           {!message.deleted ? (
                             <span
                             className={cn(
-                                "absolute -top-3 hidden items-center rounded-full border bg-background text-foreground shadow-sm group-hover/message:flex",
+                                "absolute -top-3 hidden items-center rounded-full border bg-background text-foreground shadow-sm group-hover/message:flex max-sm:flex",
                                 mine ? "right-1" : "left-1",
                             )}
                           >
                               {message.content ? (
-                                <MessageAction label="复制" onClick={() => void navigator.clipboard.writeText(message.content)}>
+                                <MessageAction label={t("messages.copy")} onClick={() => void navigator.clipboard.writeText(message.content)}>
                                   <Clipboard className="size-3" />
                                 </MessageAction>
                               ) : null}
-                              <MessageAction label="回复" onClick={() => { setReplyTo(message); setEditing(null); }}>
+                              <MessageAction label={t("messages.reply")} onClick={() => { setReplyTo(message); setEditing(null); }}>
                                 <CornerUpLeft className="size-3" />
                               </MessageAction>
                               {mine && !message.file ? (
-                                <MessageAction label="编辑" onClick={() => chooseEdit(message)}>
+                                <MessageAction label={t("messages.edit")} onClick={() => chooseEdit(message)}>
                                   <Pencil className="size-3" />
                                 </MessageAction>
                               ) : null}
                               {mine ? (
-                                <MessageAction label="撤回" onClick={() => void removeMessage(message)}>
+                                <MessageAction label={t("messages.delete")} onClick={() => void removeMessage(message)}>
                                   <Trash2 className="size-3" />
                                 </MessageAction>
                               ) : null}
@@ -1031,16 +1503,33 @@ export function InternalMessagingHost() {
                   })
                 )}
               </div>
-              <div className="border-t p-3">
+              {newMessagesBelow ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-lg"
+                  onClick={() => scrollToMessageBottom("smooth")}
+                >
+                  <ChevronDown className="size-3" />
+                  {t("messages.newBelow")}
+                </Button>
+              ) : null}
+              <div className="border-t p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
                 {replyTo || editing ? (
                   <div className="mb-2 flex items-center gap-2 rounded-md bg-muted px-2 py-1 text-xs">
                     {editing ? <Pencil className="size-3" /> : <CornerUpLeft className="size-3" />}
                     <span className="min-w-0 flex-1 truncate">
-                      {editing ? "编辑消息" : `回复：${replyTo?.content || replyTo?.file?.name || "文件"}`}
+                      {editing
+                        ? t("composer.editing")
+                        : t("composer.replying", {
+                            content:
+                              replyTo?.content || replyTo?.file?.name || t("composer.file"),
+                          })}
                     </span>
                     <button
                       type="button"
-                      aria-label="Cancel message action"
+                      aria-label={t("aria.cancelAction")}
                       onClick={() => {
                         setReplyTo(null);
                         setEditing(null);
@@ -1062,7 +1551,7 @@ export function InternalMessagingHost() {
                     }}
                   />
                   <Button
-                    aria-label="Attach file"
+                    aria-label={t("aria.attach")}
                     type="button"
                     variant="ghost"
                     size="icon"
@@ -1071,20 +1560,50 @@ export function InternalMessagingHost() {
                   >
                     {uploading ? <LoaderCircle className="animate-spin" /> : <Paperclip />}
                   </Button>
+                  <Popover open={emojiPickerOpen} onOpenChange={setEmojiPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        aria-label={t("aria.emoji")}
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                      >
+                        <Smile />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      side="top"
+                      align="start"
+                      className="grid w-64 grid-cols-8 gap-1 p-2"
+                    >
+                      {COMMON_EMOJIS.map((emoji) => (
+                        <button
+                          type="button"
+                          key={emoji}
+                          className="flex size-7 items-center justify-center rounded text-lg hover:bg-accent"
+                          onClick={() => insertEmoji(emoji)}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </PopoverContent>
+                  </Popover>
                   <Textarea
+                    ref={composerRef}
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
+                    onPaste={pasteFile}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && !event.shiftKey) {
                         event.preventDefault();
                         void send();
                       }
                     }}
-                    placeholder="输入消息…"
-                    className="max-h-28 min-h-10 resize-none"
+                    placeholder={t("composer.placeholder")}
+                    className="max-h-28 min-h-10 resize-none text-base sm:text-sm"
                   />
                   <Button
-                    aria-label="Send"
+                    aria-label={t("aria.send")}
                     size="icon"
                     disabled={!draft.trim() || sending}
                     onClick={() => void send()}
@@ -1093,6 +1612,11 @@ export function InternalMessagingHost() {
                   </Button>
                 </div>
               </div>
+              {draggingFile ? (
+                <div className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-background/90 text-sm font-medium text-primary backdrop-blur-sm">
+                  {t("composer.dropFile")}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
@@ -1106,7 +1630,7 @@ export function InternalMessagingHost() {
                     )}
                     onClick={() => setDirectoryView("recent")}
                   >
-                    最近会话
+                    {t("directory.recent")}
                   </button>
                   <button
                     type="button"
@@ -1116,7 +1640,7 @@ export function InternalMessagingHost() {
                     )}
                     onClick={() => setDirectoryView("users")}
                   >
-                    全部用户
+                    {t("directory.allUsers")}
                   </button>
                 </div>
                 {directoryView === "users" ? (
@@ -1125,18 +1649,16 @@ export function InternalMessagingHost() {
                     <Input
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder="搜索用户"
+                      placeholder={t("directory.searchPlaceholder")}
                       className="pl-8"
                     />
                   </div>
                 ) : null}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-2">
-                {error ? (
-                  <Empty label={error} />
-                ) : directoryView === "recent" ? (
+                {directoryView === "recent" ? (
                   conversations.length === 0 ? (
-                    <Empty label="还没有最近会话，可从全部用户发起聊天。" />
+                    <Empty label={t("directory.noRecent")} />
                   ) : (
                     conversations.map((conversation) => {
                       const item = conversation.user;
@@ -1150,11 +1672,26 @@ export function InternalMessagingHost() {
                             type="button"
                             className="flex min-w-0 flex-1 items-center gap-3 p-2 text-left"
                             onClick={() => selectUser(item)}
+                            onPointerEnter={() => prefetchMessages(item)}
+                            onFocus={() => prefetchMessages(item)}
+                            onTouchStart={() => prefetchMessages(item)}
                           >
-                            <Avatar>
-                              <AvatarImage src={item.avatarURL || undefined} />
-                              <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
-                            </Avatar>
+                            <span className="relative shrink-0">
+                              <Avatar>
+                                <AvatarImage src={item.avatarURL || undefined} />
+                                <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
+                              </Avatar>
+                              {presenceReady ? (
+                                <PresenceIndicator
+                                  online={Boolean(onlineByUser[item.publicID])}
+                                  label={t(
+                                    onlineByUser[item.publicID]
+                                      ? "presence.online"
+                                      : "presence.offline",
+                                  )}
+                                />
+                              ) : null}
+                            </span>
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center gap-1">
                                 <span className="truncate text-sm font-medium">
@@ -1166,12 +1703,12 @@ export function InternalMessagingHost() {
                                 ) : null}
                               </span>
                               <span className="block truncate text-xs text-muted-foreground">
-                                {conversation.lastMessagePreview || "开始聊天"}
+                                {conversation.lastMessagePreview || t("directory.start")}
                               </span>
                             </span>
                             <span className="flex shrink-0 flex-col items-end gap-1">
                               <span className="text-[10px] text-muted-foreground">
-                                {formatTime(conversation.lastMessageAt)}
+                                {formatTime(conversation.lastMessageAt, locale)}
                               </span>
                               {unread > 0 ? (
                                 <span className="flex min-w-5 items-center justify-center rounded-full bg-destructive px-1.5 py-0.5 text-[10px] font-medium text-destructive-foreground">
@@ -1180,10 +1717,12 @@ export function InternalMessagingHost() {
                               ) : null}
                             </span>
                           </button>
-                          <span className="mr-1 hidden shrink-0 group-hover/conversation:flex">
+                          <span className="mr-1 hidden shrink-0 group-hover/conversation:flex max-sm:flex">
                             <button
                               type="button"
-                              aria-label={conversation.pinned ? "Unpin conversation" : "Pin conversation"}
+                              aria-label={
+                                conversation.pinned ? t("aria.unpin") : t("aria.pin")
+                              }
                               className="rounded p-1 hover:bg-background"
                               onClick={() =>
                                 void updateConversationPreference(conversation, {
@@ -1195,7 +1734,9 @@ export function InternalMessagingHost() {
                             </button>
                             <button
                               type="button"
-                              aria-label={conversation.muted ? "Unmute conversation" : "Mute conversation"}
+                              aria-label={
+                                conversation.muted ? t("aria.unmute") : t("aria.mute")
+                              }
                               className="rounded p-1 hover:bg-background"
                               onClick={() =>
                                 void updateConversationPreference(conversation, {
@@ -1217,9 +1758,17 @@ export function InternalMessagingHost() {
                 ) : loadingUsers && users.length === 0 ? (
                   <Loading />
                 ) : users.length === 0 ? (
-                  <Empty label="没有可聊天的用户。" />
+                  <Empty label={directoryError || t("directory.noUsers")} />
                 ) : (
                   <>
+                    {directoryError ? (
+                      <p
+                        role="alert"
+                        className="mb-2 rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+                      >
+                        {directoryError}
+                      </p>
+                    ) : null}
                     {users.map((item) => {
                       const unread = unreadByUser[item.publicID] || 0;
                       return (
@@ -1228,11 +1777,26 @@ export function InternalMessagingHost() {
                           key={item.publicID}
                           className="flex w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-accent"
                           onClick={() => selectUser(item)}
+                          onPointerEnter={() => prefetchMessages(item)}
+                          onFocus={() => prefetchMessages(item)}
+                          onTouchStart={() => prefetchMessages(item)}
                         >
-                          <Avatar>
-                            <AvatarImage src={item.avatarURL || undefined} />
-                            <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
-                          </Avatar>
+                          <span className="relative shrink-0">
+                            <Avatar>
+                              <AvatarImage src={item.avatarURL || undefined} />
+                              <AvatarFallback>{initials(displayName(item))}</AvatarFallback>
+                            </Avatar>
+                            {presenceReady ? (
+                              <PresenceIndicator
+                                online={Boolean(onlineByUser[item.publicID])}
+                                label={t(
+                                  onlineByUser[item.publicID]
+                                    ? "presence.online"
+                                    : "presence.offline",
+                                )}
+                              />
+                            ) : null}
+                          </span>
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-sm font-medium">
                               {displayName(item)}
@@ -1256,7 +1820,7 @@ export function InternalMessagingHost() {
                         disabled={loadingUsers}
                         onClick={() => void loadUsers(directoryPage + 1, true)}
                       >
-                        {loadingUsers ? "加载中…" : "加载更多用户"}
+                        {loadingUsers ? t("messages.loading") : t("directory.loadMore")}
                       </Button>
                     ) : null}
                   </>
@@ -1265,30 +1829,56 @@ export function InternalMessagingHost() {
             </div>
           )}
 
-          {RESIZE_HANDLES.map(({ direction, className }) => (
-            <button
-              aria-label={`Resize chat window ${direction}`}
-              type="button"
-              tabIndex={-1}
-              key={direction}
-              data-direction={direction}
-              className={cn("absolute z-10 touch-none border-0 bg-transparent p-0", className)}
-              onPointerDown={startResize}
-              onPointerMove={resizeWindow}
-              onPointerUp={stopResize}
-              onPointerCancel={stopResize}
-            />
-          ))}
+          {!mobileLayout
+            ? RESIZE_HANDLES.map(({ direction, className }) => (
+                <button
+                  aria-label={t("aria.resize", { direction })}
+                  type="button"
+                  tabIndex={-1}
+                  key={direction}
+                  data-direction={direction}
+                  className={cn(
+                    "absolute z-10 touch-none border-0 bg-transparent p-0",
+                    className,
+                  )}
+                  onPointerDown={startResize}
+                  onPointerMove={resizeWindow}
+                  onPointerUp={stopResize}
+                  onPointerCancel={stopResize}
+                />
+              ))
+            : null}
         </aside>
       ) : null}
 
+      {previewMessage ? (
+        <ImageLightbox
+          accessToken={accessToken}
+          message={previewMessage}
+          onClose={() => setPreviewMessage(null)}
+          onError={() => setActionError(t("errors.fileDownload"))}
+        />
+      ) : null}
+
       <Button
-        aria-label="Open internal messages"
+        aria-label={t("aria.open")}
         className={cn(
-          "fixed z-[69] size-11 touch-none cursor-grab rounded-full shadow-lg active:cursor-grabbing",
+          "fixed z-[69] size-11 rounded-full shadow-lg",
+          mobileLayout
+            ? "touch-manipulation cursor-pointer"
+            : "touch-none cursor-grab active:cursor-grabbing",
           open && "hidden",
         )}
-        style={buttonPoint ? { left: buttonPoint.x, top: buttonPoint.y } : { right: 20, bottom: 20 }}
+        style={
+          mobileLayout
+            ? {
+                right: "max(16px, env(safe-area-inset-right))",
+                bottom: "max(16px, env(safe-area-inset-bottom))",
+              }
+            : buttonPoint
+              ? { left: buttonPoint.x, top: buttonPoint.y }
+              : { right: 20, bottom: 20 }
+        }
         size="icon"
         onPointerDown={startButtonDrag}
         onPointerMove={moveButton}
@@ -1308,9 +1898,11 @@ export function InternalMessagingHost() {
 }
 
 function Loading() {
+  const t = useTranslations("internalMessaging");
   return (
     <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-      <LoaderCircle className="mr-2 size-4 animate-spin" />加载中…
+      <LoaderCircle className="mr-2 size-4 animate-spin" />
+      {t("messages.loading")}
     </div>
   );
 }
@@ -1320,6 +1912,20 @@ function Empty({ label }: { label: string }) {
     <div className="flex h-full items-center justify-center p-8 text-center text-xs text-muted-foreground">
       {label}
     </div>
+  );
+}
+
+function PresenceIndicator({ online, label }: { online: boolean; label: string }) {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "absolute bottom-0 right-0 size-3 rounded-full border-2 border-background",
+        online ? "bg-emerald-500" : "bg-muted-foreground/50",
+      )}
+    />
   );
 }
 
@@ -1349,21 +1955,48 @@ function MessageFile({
   accessToken,
   message,
   onError,
+  onContentResize,
+  onPreview,
 }: {
   accessToken: string;
   message: InternalMessagingMessage;
   onError: () => void;
+  onContentResize: () => void;
+  onPreview: () => void;
 }) {
+  const t = useTranslations("internalMessaging");
+  const locale = useLocale();
   const [imageURL, setImageURL] = React.useState("");
+  const [shouldLoadImage, setShouldLoadImage] = React.useState(false);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
   const file = message.file;
   const onErrorRef = React.useRef(onError);
   onErrorRef.current = onError;
 
   React.useEffect(() => {
-    if (!file?.image) return;
+    if (!file?.image || shouldLoadImage) return;
+    const element = containerRef.current;
+    if (!element || !("IntersectionObserver" in window)) {
+      setShouldLoadImage(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setShouldLoadImage(true);
+        observer.disconnect();
+      },
+      { rootMargin: "320px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [file?.image, shouldLoadImage]);
+
+  React.useEffect(() => {
+    if (!file?.image || !shouldLoadImage) return;
     let disposed = false;
     let objectURL = "";
-    void downloadInternalMessagingFile(accessToken, message.id)
+    void downloadInternalMessagingFile(accessToken, message.id, { thumbnail: true })
       .then((blob) => {
         if (disposed) return;
         objectURL = URL.createObjectURL(blob);
@@ -1376,7 +2009,7 @@ function MessageFile({
       disposed = true;
       if (objectURL) URL.revokeObjectURL(objectURL);
     };
-  }, [accessToken, file?.image, message.id]);
+  }, [accessToken, file?.image, message.id, shouldLoadImage]);
 
   if (!file) return null;
 
@@ -1395,36 +2028,127 @@ function MessageFile({
   };
 
   return (
-    <button type="button" className="block max-w-full text-left" onClick={() => void download()}>
+    <div ref={containerRef} className="block max-w-full text-left">
       {file.image && imageURL ? (
-        <img
-          src={imageURL}
-          className="mb-1 max-h-56 max-w-full rounded-lg object-contain"
-          alt={file.name}
-        />
+        <button type="button" className="group/image relative block" onClick={onPreview}>
+          <img
+            src={imageURL}
+            loading="lazy"
+            className="mb-1 max-h-56 max-w-full rounded-lg object-contain"
+            alt={file.name}
+            onLoad={onContentResize}
+          />
+          <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-black/0 opacity-0 transition group-hover/image:bg-black/25 group-hover/image:opacity-100">
+            <Maximize2 className="size-5 text-white drop-shadow" />
+          </span>
+        </button>
       ) : (
-        <span className="flex items-center gap-2">
+        <button type="button" className="flex items-center gap-2" onClick={() => void download()}>
           <FileIcon className="size-8 shrink-0" />
           <span className="min-w-0">
             <span className="block truncate font-medium">{file.name}</span>
-            <span className="block text-xs opacity-70">{formatFileSize(file.size)}</span>
+            <span className="block text-xs opacity-70">
+              {formatFileSize(file.size, locale, t("file.unknownSize"))}
+            </span>
           </span>
           <Download className="size-4 shrink-0" />
-        </span>
+        </button>
       )}
       {file.image && imageURL ? (
-        <span className="flex items-center gap-1 text-xs opacity-75">
+        <button
+          type="button"
+          className="flex w-full items-center gap-1 text-xs opacity-75"
+          onClick={() => void download()}
+        >
           <span className="min-w-0 flex-1 truncate">{file.name}</span>
           <Download className="size-3" />
-        </span>
+        </button>
       ) : null}
-    </button>
+    </div>
   );
 }
 
-function formatFileSize(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "未知大小";
+function ImageLightbox({
+  accessToken,
+  message,
+  onClose,
+  onError,
+}: {
+  accessToken: string;
+  message: InternalMessagingMessage;
+  onClose: () => void;
+  onError: () => void;
+}) {
+  const t = useTranslations("internalMessaging");
+  const [imageURL, setImageURL] = React.useState("");
+  const onErrorRef = React.useRef(onError);
+  onErrorRef.current = onError;
+
+  React.useEffect(() => {
+    let disposed = false;
+    let objectURL = "";
+    void downloadInternalMessagingFile(accessToken, message.id)
+      .then((blob) => {
+        if (disposed) return;
+        objectURL = URL.createObjectURL(blob);
+        setImageURL(objectURL);
+      })
+      .catch(() => {
+        if (!disposed) onErrorRef.current();
+      });
+    return () => {
+      disposed = true;
+      if (objectURL) URL.revokeObjectURL(objectURL);
+    };
+  }, [accessToken, message.id]);
+
+  React.useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("aria.imagePreview")}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+    >
+      <button
+        type="button"
+        aria-label={t("aria.closePreview")}
+        className="absolute inset-0 cursor-default"
+        onClick={onClose}
+      />
+      <button
+        type="button"
+        aria-label={t("aria.closePreview")}
+        className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        onClick={onClose}
+      >
+        <X className="size-5" />
+      </button>
+      {imageURL ? (
+        <img
+          src={imageURL}
+          alt={message.file?.name || ""}
+          className="relative max-h-full max-w-full object-contain"
+        />
+      ) : (
+        <LoaderCircle className="size-8 animate-spin text-white" />
+      )}
+    </div>
+  );
+}
+
+function formatFileSize(bytes: number, locale: string, unknownSize: string) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return unknownSize;
+  const format = (value: number) =>
+    new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${format(bytes / 1024)} KB`;
+  return `${format(bytes / 1024 / 1024)} MB`;
 }

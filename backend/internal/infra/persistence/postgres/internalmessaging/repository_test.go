@@ -65,6 +65,39 @@ func TestRecordMessageMaintainsDurableUnreadAndRecentState(t *testing.T) {
 	}
 }
 
+func TestRecordMessagesBatchesHistoryAndFindMessagesIsParticipantScoped(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+	sentAt := time.Date(2026, 8, 22, 9, 0, 0, 0, time.UTC)
+	items := []domainmessaging.MessageIndex{
+		{MID: 101, SenderUserID: 1, RecipientUserID: 2, ContentType: "text/plain", Content: "first", SentAt: sentAt},
+		{MID: 102, SenderUserID: 1, RecipientUserID: 2, ContentType: "text/plain", Content: "second", SentAt: sentAt.Add(time.Second)},
+		{MID: 102, SenderUserID: 1, RecipientUserID: 2, ContentType: "text/plain", Content: "duplicate", SentAt: sentAt.Add(time.Second)},
+		{MID: 103, SenderUserID: 3, RecipientUserID: 4, ContentType: "text/plain", Content: "private", SentAt: sentAt},
+	}
+	if err := repo.RecordMessages(ctx, items); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := repo.FindMessages(ctx, 1, []int64{101, 102, 103})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 {
+		t.Fatalf("participant-visible messages = %d, want 2: %+v", len(found), found)
+	}
+	byMID := make(map[int64]domainmessaging.MessageIndex, len(found))
+	for _, item := range found {
+		byMID[item.MID] = item
+	}
+	if byMID[101].Content != "first" || byMID[102].Content != "second" {
+		t.Fatalf("unexpected batch contents: %+v", byMID)
+	}
+	if unread, err := repo.TotalUnread(ctx, 2); err != nil || unread != 2 {
+		t.Fatalf("batch unread = %d, err=%v, want 2", unread, err)
+	}
+}
+
 func TestMarkReadKeepsNewerMessagesUnreadAndClampsFutureMID(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()

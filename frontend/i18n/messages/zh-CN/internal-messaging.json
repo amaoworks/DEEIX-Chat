@@ -1,0 +1,85 @@
+{
+  "title": "站内消息",
+  "dragHint": "拖动标题栏移动窗口",
+  "mobileHint": "选择会话开始聊天",
+  "aria": {
+    "back": "返回用户列表",
+    "search": "搜索消息",
+    "notificationsOn": "关闭通知",
+    "notificationsOff": "开启通知",
+    "close": "关闭站内消息",
+    "dismissError": "关闭错误提示",
+    "cancelAction": "取消消息操作",
+    "attach": "添加文件",
+    "emoji": "选择表情",
+    "send": "发送",
+    "open": "打开站内消息",
+    "resize": "沿 {direction} 方向缩放聊天窗口",
+    "pin": "置顶会话",
+    "unpin": "取消置顶",
+    "mute": "静音会话",
+    "unmute": "取消静音",
+    "imagePreview": "图片预览",
+    "closePreview": "关闭图片预览"
+  },
+  "errors": {
+    "directory": "聊天服务暂不可用，请稍后重试。",
+    "history": "消息暂时无法加载。",
+    "olderHistory": "加载更早消息失败，请重试。",
+    "preferences": "会话设置保存失败，请重试。",
+    "search": "消息搜索失败，请重试。",
+    "edit": "消息编辑失败，请重试。",
+    "send": "消息发送失败，请重试。",
+    "delete": "消息撤回失败，请重试。",
+    "fileSend": "文件发送失败，请重试。",
+    "fileDownload": "文件下载失败，请重试。",
+    "locate": "无法定位这条消息，请稍后重试。"
+  },
+  "notifications": {
+    "file": "你收到一个文件",
+    "message": "你收到了一条新消息"
+  },
+  "presence": {
+    "online": "在线",
+    "offline": "离线"
+  },
+  "search": {
+    "placeholder": "搜索当前会话",
+    "action": "搜索"
+  },
+  "messages": {
+    "loading": "加载中…",
+    "loadOlder": "加载更早消息",
+    "newBelow": "有新消息",
+    "empty": "还没有消息，发起第一句吧。",
+    "renderError": "这条消息暂时无法显示。",
+    "olderReply": "回复较早的消息",
+    "deleted": "消息已撤回",
+    "edited": "已编辑 · ",
+    "copy": "复制",
+    "reply": "回复",
+    "edit": "编辑",
+    "delete": "撤回",
+    "confirmDelete": "确定撤回这条消息吗？"
+  },
+  "composer": {
+    "editing": "编辑消息",
+    "replying": "回复：{content}",
+    "file": "文件",
+    "placeholder": "输入消息…",
+    "dropFile": "松开发送此文件"
+  },
+  "directory": {
+    "recent": "最近会话",
+    "allUsers": "全部用户",
+    "searchPlaceholder": "搜索用户",
+    "noRecent": "还没有最近会话，可从全部用户发起聊天。",
+    "start": "开始聊天",
+    "noUsers": "没有可聊天的用户。",
+    "loadMore": "加载更多用户"
+  },
+  "file": {
+    "tooLarge": "单个文件不能超过 {size}。",
+    "unknownSize": "未知大小"
+  }
+}

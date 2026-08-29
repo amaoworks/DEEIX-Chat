@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	app "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/internalmessaging"
 )
 
 func TestSanitizeEventForBrowserRemovesVoceFilePath(t *testing.T) {
@@ -45,6 +47,38 @@ func TestSanitizeEventForBrowserPreservesTextContent(t *testing.T) {
 	sanitizeEventForBrowser(payload)
 	if !strings.Contains(string(payload["detail"]), `"content":"hello"`) {
 		t.Fatalf("text event was modified: %s", payload["detail"])
+	}
+}
+
+func TestCanonicalEventMID(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want int64
+	}{
+		{name: "normal", raw: `{"type":"chat","mid":321,"detail":{"type":"normal"}}`, want: 321},
+		{name: "reply", raw: `{"type":"chat","mid":322,"detail":{"type":"reply","mid":321}}`, want: 322},
+		{name: "edit reaction", raw: `{"type":"chat","mid":400,"detail":{"type":"reaction","mid":321,"detail":{"type":"edit"}}}`, want: 321},
+		{name: "delete reaction", raw: `{"type":"chat","mid":401,"detail":{"type":"reaction","mid":321,"detail":{"type":"delete"}}}`, want: 321},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := canonicalEventMID(decodeEventPayload(t, test.raw)); got != test.want {
+				t.Fatalf("canonicalEventMID()=%d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestEncodePresenceEventExposesOnlyDEEIXIdentity(t *testing.T) {
+	line := encodePresenceEvent("users_state_changed", []app.PresenceUser{{PublicID: "opaque-user", Online: true}})
+	if !strings.Contains(line, `"publicID":"opaque-user"`) || !strings.Contains(line, `"online":true`) {
+		t.Fatalf("unexpected presence event: %s", line)
+	}
+	for _, private := range []string{"uid", "voce", "api-key"} {
+		if strings.Contains(strings.ToLower(line), private) {
+			t.Fatalf("presence event exposed private field %q: %s", private, line)
+		}
 	}
 }
 
