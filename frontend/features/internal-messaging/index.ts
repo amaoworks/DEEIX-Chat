@@ -1,1 +1,1 @@
-export { InternalMessagingHost } from "@/features/internal-messaging/components/internal-messaging-host";
+export { InternalMessagingHost } from "@/features/internal-messaging/components/internal-messaging-launcher";

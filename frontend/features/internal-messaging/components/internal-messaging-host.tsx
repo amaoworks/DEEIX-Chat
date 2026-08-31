@@ -1,6 +1,6 @@
 "use client";
 
-import * as React from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Bell,
   BellOff,
@@ -26,14 +26,27 @@ import {
   X,
 } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
+import * as React from "react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import type { CachedConversation } from "@/features/internal-messaging/model/conversation-cache";
+import {
+  createCachedConversation,
+  MAX_CONCURRENT_PREFETCHES,
+  readConversationCache,
+  writeConversationCache,
+} from "@/features/internal-messaging/model/conversation-cache";
+import {
+  applySelectedConversationLiveEvent,
+  mergeMessages,
+} from "@/features/internal-messaging/model/live-event-merge";
+import { safeInternalMessageMarkdown } from "@/features/internal-messaging/model/message-markdown";
+import { messageRowContainmentStyle } from "@/features/internal-messaging/model/message-row-visibility";
 import { cn } from "@/lib/utils";
-import { StreamdownRender } from "@/shared/components/markdown/streamdown-render";
 import {
   deleteInternalMessagingMessage,
   downloadInternalMessagingFile,
@@ -46,16 +59,22 @@ import {
   openInternalMessagingEvents,
   replyInternalMessagingMessage,
   searchInternalMessagingMessages,
-  sendInternalMessagingMessage,
   sendInternalMessagingFile,
+  sendInternalMessagingMessage,
   updateInternalMessagingPreferences,
 } from "@/shared/api/internal-messaging";
 import type {
   InternalMessagingConversation,
   InternalMessagingMessage,
+  InternalMessagingStatus,
   InternalMessagingUser,
 } from "@/shared/api/internal-messaging.types";
 import { useAuthSession } from "@/shared/auth/auth-session-context";
+
+const LazyInternalMessageMarkdown = React.lazy(async () => {
+  const module = await import("./internal-message-markdown");
+  return { default: module.InternalMessageMarkdown };
+});
 
 type Point = { x: number; y: number };
 type WindowBounds = Point & { width: number; height: number };
@@ -77,12 +96,7 @@ type ResizeSnapshot = {
 type PendingMessageScroll =
   | { mode: "bottom"; behavior: ScrollBehavior }
   | { mode: "preserve"; scrollHeight: number; scrollTop: number };
-type CachedConversation = {
-  messages: InternalMessagingMessage[];
-  hasMore: boolean;
-  nextBefore: number;
-  storedAt: number;
-};
+type MessageFocusRequest = { id: number; sequence: number };
 type MessagingEvent = {
   type?: string;
   mid?: number;
@@ -121,7 +135,6 @@ const MIN_WINDOW_HEIGHT = 360;
 const LAYOUT_STORAGE_PREFIX = "deeix.internal-messaging.layout.v1";
 const NOTIFICATION_STORAGE_PREFIX = "deeix.internal-messaging.notifications.v1";
 const MESSAGE_BOTTOM_THRESHOLD = 80;
-const MESSAGE_CACHE_TTL = 30_000;
 const COMMON_EMOJIS = [
   "😀", "😃", "😄", "😁", "😂", "😊", "😍", "🥰",
   "😘", "😎", "🤔", "😅", "😭", "😡", "🥳", "🤩",
@@ -146,26 +159,6 @@ function initials(value: string) {
 
 function displayName(user: InternalMessagingUser) {
   return user.displayName || user.username;
-}
-
-function safeInternalMessageMarkdown(content: string) {
-  // Internal messages use authenticated file attachments for images. Render
-  // Markdown image syntax as its alt text so a message cannot trigger a
-  // background request to an arbitrary third-party tracking URL.
-  return content
-    .replace(/!\[([^\]]*)\]\((?:\\.|[^)])*\)/g, "$1")
-    .replace(/!\[([^\]]*)\]\[[^\]]*\]/g, "$1")
-    .replace(/<img\b[^>]*>/gi, "");
-}
-
-function mergeMessages(
-  ...groups: InternalMessagingMessage[][]
-): InternalMessagingMessage[] {
-  const byID = new Map<number, InternalMessagingMessage>();
-  for (const group of groups) {
-    for (const message of group) byID.set(message.id, message);
-  }
-  return [...byID.values()].sort((left, right) => left.id - right.id);
 }
 
 function formatTime(value: string, locale: string) {
@@ -320,15 +313,25 @@ function useMessagingEvents(
   }, [accessToken, enabled]);
 }
 
-export function InternalMessagingHost() {
+export function InternalMessagingWindowHost({
+  initiallyOpen = false,
+  initialStatus,
+}: {
+  initiallyOpen?: boolean;
+  initialStatus?: InternalMessagingStatus;
+}) {
   const t = useTranslations("internalMessaging");
   const locale = useLocale();
   const mobileLayout = useMobileMessagingLayout();
   const { accessToken, user } = useAuthSession();
-  const [enabled, setEnabled] = React.useState(false);
-  const [maxFileBytes, setMaxFileBytes] = React.useState(20 * 1024 * 1024);
-  const [browserNotificationsAllowed, setBrowserNotificationsAllowed] = React.useState(true);
-  const [open, setOpen] = React.useState(false);
+  const [enabled, setEnabled] = React.useState(initialStatus?.enabled || false);
+  const [maxFileBytes, setMaxFileBytes] = React.useState(
+    initialStatus?.maxFileBytes || 20 * 1024 * 1024,
+  );
+  const [browserNotificationsAllowed, setBrowserNotificationsAllowed] = React.useState(
+    initialStatus?.browserNotifications ?? true,
+  );
+  const [open, setOpen] = React.useState(initiallyOpen);
   const [users, setUsers] = React.useState<InternalMessagingUser[]>([]);
   const [conversations, setConversations] = React.useState<InternalMessagingConversation[]>([]);
   const [directoryView, setDirectoryView] = React.useState<"recent" | "users">("recent");
@@ -348,7 +351,7 @@ export function InternalMessagingHost() {
   const [editing, setEditing] = React.useState<InternalMessagingMessage | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [unreadByUser, setUnreadByUser] = React.useState<Record<string, number>>({});
-  const [totalUnread, setTotalUnread] = React.useState(0);
+  const [totalUnread, setTotalUnread] = React.useState(initialStatus?.unreadCount || 0);
   const [messageSearchOpen, setMessageSearchOpen] = React.useState(false);
   const [messageSearchQuery, setMessageSearchQuery] = React.useState("");
   const [messageSearchResults, setMessageSearchResults] = React.useState<InternalMessagingMessage[]>([]);
@@ -358,6 +361,8 @@ export function InternalMessagingHost() {
   const [messageError, setMessageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
   const [newMessagesBelow, setNewMessagesBelow] = React.useState(false);
+  const [messageFocusRequest, setMessageFocusRequest] =
+    React.useState<MessageFocusRequest | null>(null);
   const [draggingFile, setDraggingFile] = React.useState(false);
   const [previewMessage, setPreviewMessage] =
     React.useState<InternalMessagingMessage | null>(null);
@@ -409,12 +414,11 @@ export function InternalMessagingHost() {
 
   React.useEffect(() => {
     if (!selected) return;
-    messageCacheRef.current.set(selected.publicID, {
-      messages,
-      hasMore: hasMoreMessages,
-      nextBefore,
-      storedAt: Date.now(),
-    });
+    writeConversationCache(
+      messageCacheRef.current,
+      selected.publicID,
+      createCachedConversation(messages, hasMoreMessages, nextBefore),
+    );
   }, [hasMoreMessages, messages, nextBefore, selected]);
 
   React.useLayoutEffect(() => {
@@ -638,12 +642,11 @@ export function InternalMessagingHost() {
         setMessages(merged);
         setHasMoreMessages(page.hasMore);
         setNextBefore(page.nextBefore);
-        messageCacheRef.current.set(recipient.publicID, {
-          messages: merged,
-          hasMore: page.hasMore,
-          nextBefore: page.nextBefore,
-          storedAt: Date.now(),
-        });
+        writeConversationCache(
+          messageCacheRef.current,
+          recipient.publicID,
+          createCachedConversation(merged, page.hasMore, page.nextBefore),
+        );
         if (!before) {
           const throughMID = next.reduce((maximum, item) => Math.max(maximum, item.id), 0);
           // History is ready to render. Durable read-state reconciliation is
@@ -668,17 +671,21 @@ export function InternalMessagingHost() {
 
   const prefetchMessages = React.useCallback(
     (recipient: InternalMessagingUser) => {
-      const cached = messageCacheRef.current.get(recipient.publicID);
-      if (cached && Date.now() - cached.storedAt < MESSAGE_CACHE_TTL) return;
+      const cached = readConversationCache(messageCacheRef.current, recipient.publicID);
+      if (cached) return;
       if (messagePrefetchRef.current.has(recipient.publicID)) return;
+      if (messagePrefetchRef.current.size >= MAX_CONCURRENT_PREFETCHES) return;
       const request = listInternalMessagingMessages(accessToken, recipient.publicID)
         .then((page) => {
-          messageCacheRef.current.set(recipient.publicID, {
-            messages: mergeMessages(page.results),
-            hasMore: page.hasMore,
-            nextBefore: page.nextBefore,
-            storedAt: Date.now(),
-          });
+          writeConversationCache(
+            messageCacheRef.current,
+            recipient.publicID,
+            createCachedConversation(
+              mergeMessages(page.results),
+              page.hasMore,
+              page.nextBefore,
+            ),
+          );
         })
         .catch(() => undefined)
         .finally(() => messagePrefetchRef.current.delete(recipient.publicID));
@@ -746,19 +753,30 @@ export function InternalMessagingHost() {
 
     if (canonical && peerPublicID) {
       if (selectedConversation) {
-        const previousMaximum = messagesRef.current.reduce(
-          (maximum, item) => Math.max(maximum, item.id),
-          0,
-        );
-        if (!reaction && canonical.id > previousMaximum) {
+        const decision = applySelectedConversationLiveEvent({
+          loaded: messagesRef.current,
+          incoming: canonical,
+          reaction,
+        });
+        if (decision.mergedAsTail) {
           if (nearMessageBottomRef.current) {
             pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
           } else if (incoming) {
             setNewMessagesBelow(true);
           }
         }
-        setMessages((current) => mergeMessages(current, [canonical]));
-        if (incoming) syncReadState(peerPublicID, canonical.id);
+        if (decision.changed) {
+          setMessages((current) =>
+            applySelectedConversationLiveEvent({
+              loaded: current,
+              incoming: canonical,
+              reaction,
+            }).messages,
+          );
+        }
+        if (incoming && decision.advanceReadCursor) {
+          syncReadState(peerPublicID, canonical.id);
+        }
       } else if (incoming && !reaction) {
         setUnreadByUser((current) => ({
           ...current,
@@ -815,7 +833,7 @@ export function InternalMessagingHost() {
       sequence: messageRequestRef.current.sequence + 1,
       controller: null,
     };
-    const cached = messageCacheRef.current.get(next.publicID);
+    const cached = readConversationCache(messageCacheRef.current, next.publicID);
     setSelected(next);
     setMessages(cached?.messages || []);
     setHasMoreMessages(cached?.hasMore || false);
@@ -1067,12 +1085,7 @@ export function InternalMessagingHost() {
       }
     }
     setMessageSearchOpen(false);
-    window.setTimeout(() => {
-      document.getElementById(`internal-message-${result.id}`)?.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-    });
+    setMessageFocusRequest((current) => ({ id: result.id, sequence: (current?.sequence || 0) + 1 }));
   };
 
   const startButtonDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -1406,14 +1419,22 @@ export function InternalMessagingHost() {
                 ) : messages.length === 0 ? (
                   <Empty label={messageError || t("messages.empty")} />
                 ) : (
-                  messages.map((message) => {
+                  <MessageRows
+                    messages={messages}
+                    viewportRef={messageViewportRef}
+                    focusRequest={messageFocusRequest}
+                  >
+                    {(message) => {
                     const mine = message.fromUserPublicID === user.publicID;
                     return (
                       <div
-                        key={message.id}
                         id={`internal-message-${message.id}`}
                         className={cn("flex", mine ? "justify-end" : "justify-start")}
-                        style={{ contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
+                        style={messageRowContainmentStyle({
+                          loadingOlderMessages,
+                          preservingOlderScroll:
+                            pendingMessageScrollRef.current?.mode === "preserve",
+                        })}
                       >
                         <div
                           className={cn(
@@ -1449,16 +1470,22 @@ export function InternalMessagingHost() {
                                 onPreview={() => setPreviewMessage(message)}
                               />
                             ) : (
-                              <StreamdownRender
-                                content={safeInternalMessageMarkdown(message.content)}
-                                streaming={false}
-                                variant="user"
+                              <React.Suspense
+                                fallback={
+                                  <p className="whitespace-pre-wrap break-words text-sm">
+                                    {message.content}
+                                  </p>
+                                }
+                              >
+                                <LazyInternalMessageMarkdown
+                                  content={safeInternalMessageMarkdown(message.content)}
                                 className={cn(
                                   "break-words text-sm [&_a]:underline [&_a]:underline-offset-2 [&_p]:my-0",
                                   mine &&
                                     "text-primary-foreground [&_a]:text-primary-foreground",
                                 )}
-                              />
+                                />
+                              </React.Suspense>
                             )}
                           </MessageRenderBoundary>
                           <p
@@ -1500,7 +1527,8 @@ export function InternalMessagingHost() {
                         </div>
                       </div>
                     );
-                  })
+                    }}
+                  </MessageRows>
                 )}
               </div>
               {newMessagesBelow ? (
@@ -1574,7 +1602,7 @@ export function InternalMessagingHost() {
                     <PopoverContent
                       side="top"
                       align="start"
-                      className="grid w-64 grid-cols-8 gap-1 p-2"
+                      className="z-[80] grid w-64 grid-cols-8 gap-1 p-2"
                     >
                       {COMMON_EMOJIS.map((emoji) => (
                         <button
@@ -1894,6 +1922,66 @@ export function InternalMessagingHost() {
         ) : null}
       </Button>
     </>
+  );
+}
+
+function MessageRows({
+  messages,
+  viewportRef,
+  focusRequest,
+  children,
+}: {
+  messages: InternalMessagingMessage[];
+  viewportRef: React.RefObject<HTMLDivElement | null>;
+  focusRequest: MessageFocusRequest | null;
+  children: (message: InternalMessagingMessage) => React.ReactNode;
+}) {
+  const enabled = messages.length > 120;
+  const virtualizer = useVirtualizer({
+    count: enabled ? messages.length : 0,
+    enabled,
+    estimateSize: () => 76,
+    getScrollElement: () => viewportRef.current,
+    getItemKey: (index) => messages[index]?.id || index,
+    overscan: 12,
+  });
+
+  React.useLayoutEffect(() => {
+    if (!focusRequest) return;
+    const index = messages.findIndex((message) => message.id === focusRequest.id);
+    if (index < 0) return;
+    if (enabled) {
+      virtualizer.scrollToIndex(index, { align: "center", behavior: "smooth" });
+      return;
+    }
+    document.getElementById(`internal-message-${focusRequest.id}`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [enabled, focusRequest, messages, virtualizer]);
+
+  if (!enabled) {
+    return <div className="space-y-3">{messages.map((message) => <React.Fragment key={message.id}>{children(message)}</React.Fragment>)}</div>;
+  }
+
+  return (
+    <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+      {virtualizer.getVirtualItems().map((virtualRow) => {
+        const message = messages[virtualRow.index];
+        if (!message) return null;
+        return (
+          <div
+            key={message.id}
+            ref={virtualizer.measureElement}
+            data-index={virtualRow.index}
+            className="absolute left-0 top-0 w-full pb-3"
+            style={{ transform: `translateY(${virtualRow.start}px)` }}
+          >
+            {children(message)}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

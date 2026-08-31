@@ -62,6 +62,15 @@ DEEIX_NEXT_ALLOWED_DEV_ORIGINS='203.0.113.10,dev.example.com' \
 
 后端使用固定 Go 1.26.5 的开发工具链容器，不依赖宿主机的 `make` 或 Go 版本。第一次运行会构建该轻量镜像并下载 Go 模块，后续启动复用 `.deeix/deeix/` 下的模块与构建缓存；源码和 SQLite 数据仍位于当前工作区。
 
+默认 Web 编译器是 Turbopack。内存较小的开发机可以按需为 Next.js 的 V8 堆设置保护上限，不会关闭聊天功能：
+
+```bash
+DEEIX_DEV_NODE_HEAP_MB=1024 \
+  ./scripts/dev-deeix.sh
+```
+
+`DEEIX_DEV_WEB_ENGINE` 支持 `turbopack`（默认）和 `webpack`，用于必要的兼容性对比。当前完整 `/chat` 模块图在 Webpack 下需要超过 1024 MiB V8 堆，因此低内存机器应继续使用 Turbopack。`DEEIX_DEV_NODE_HEAP_MB` 最低为 `512`，设置过低会让开发编译因堆不足退出，因此它是保护上限而不是通用的节省比例。
+
 如需覆盖浏览器访问的 API 地址或保留 VoceChat 容器：
 
 ```bash

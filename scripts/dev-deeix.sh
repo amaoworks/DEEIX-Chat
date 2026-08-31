@@ -54,15 +54,17 @@ Useful overrides:
   VOCECHAT_DEV_PORT=3101
   DEEIX_DEV_SKIP_INSTALL=true
   DEEIX_DEV_KEEP_VOCECHAT=true
+  DEEIX_DEV_WEB_ENGINE=turbopack|webpack
+  DEEIX_DEV_NODE_HEAP_MB=1024
 EOF
 }
 
 cleanup() {
   trap - EXIT HUP INT TERM
 
-  # Removing the API container first unblocks its docker client and lets Turbo
-  # finish normally. Turbo runs in a separate process group so no pnpm, Next,
-  # helper shell or docker client can survive after this launcher exits.
+  # Removing the API container first unblocks its docker client. The lightweight
+  # service supervisor runs in a separate process group so no Next, helper shell
+  # or docker client can survive after this launcher exits.
   docker rm -f "$API_CONTAINER" >/dev/null 2>&1 || true
   if [ -n "$DEV_PID" ] && /bin/kill -0 -- "-$DEV_PID" >/dev/null 2>&1; then
     /bin/kill -TERM -- "-$DEV_PID" >/dev/null 2>&1 || true
@@ -139,6 +141,10 @@ export CONFIG_FILE
 export HTTP_PORT="$API_PORT"
 export PORT="$WEB_PORT"
 export DEEIX_NEXT_ALLOWED_DEV_ORIGINS=${DEEIX_NEXT_ALLOWED_DEV_ORIGINS:-"$ADVERTISE_HOST"}
+export DEEIX_DEV_WEB_ENGINE=${DEEIX_DEV_WEB_ENGINE:-turbopack}
+if [ -n "${DEEIX_DEV_NODE_HEAP_MB:-}" ]; then
+  export DEEIX_DEV_NODE_HEAP_MB
+fi
 export NEXT_PUBLIC_API_BASE_URL="$API_URL"
 export PUBLIC_API_BASE_URL="$API_URL"
 export PUBLIC_WEB_BASE_URL="$WEB_URL"
@@ -161,6 +167,11 @@ if [ "${DEEIX_DEV_SKIP_INSTALL:-false}" != true ]; then
   (cd "$PROJECT_DIR" && pnpm install --frozen-lockfile)
 fi
 
+# Run the frontend preparation once, then launch the API and Next directly.
+# Avoiding a persistent Turbo process and three pnpm wrappers saves hundreds of
+# MiB in a long-running development session without changing application code.
+(cd "$PROJECT_DIR/frontend" && pnpm run predev)
+
 printf '%s\n' \
   "Starting DEEIX development services..." \
   "API toolchain: Docker, Go 1.26.5 (no host make/Go installation required)" \
@@ -170,14 +181,12 @@ printf '%s\n' \
   "API local: http://127.0.0.1:$API_PORT" \
   "API for browser: $API_URL" \
   "VoceChat: http://127.0.0.1:$VOCECHAT_PORT (internal dependency; do not log in here)" \
+  "Web compiler: $DEEIX_DEV_WEB_ENGINE${DEEIX_DEV_NODE_HEAP_MB:+ (V8 heap limit: ${DEEIX_DEV_NODE_HEAP_MB} MiB)}" \
   "Warning: the DEEIX development Web/API ports are reachable from the network; stop with Ctrl+C immediately after testing." \
   "Press Ctrl+C to stop."
 
 cd "$PROJECT_DIR"
-# Turborepo's strict environment mode filters variables that are not declared
-# in turbo.json. This local launcher deliberately passes the runtime config
-# above through to both workspace processes.
-setsid pnpm exec turbo run dev --env-mode=loose &
+setsid "$PROJECT_DIR/scripts/dev-services.sh" &
 DEV_PID=$!
 set +e
 wait "$DEV_PID"
