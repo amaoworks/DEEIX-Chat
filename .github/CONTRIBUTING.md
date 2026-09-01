@@ -39,7 +39,7 @@ Use the example configuration files for local development. Do not commit local s
 ## Commit Messages
 
 Use the `type: subject` format for every commit message subject.
-Use only English letters, numbers, spaces, periods, hyphens, and underscores in the subject.
+Use printable ASCII in the subject: English letters, numbers, spaces, and punctuation. Non-ASCII characters such as CJK text or emoji are rejected.
 
 Allowed types:
 

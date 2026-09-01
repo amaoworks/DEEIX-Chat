@@ -271,6 +271,18 @@ func (h *Handler) GetChatContextPolicy(c *gin.Context) {
 	response.Success(c, ChatContextPolicyResponse{ContextCompactEnabled: cfg.ContextCompactEnabled})
 }
 
+// GetFeaturePolicy godoc
+// @Summary 查询用户侧功能开关策略
+// @Tags settings
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.Envelope
+// @Router /settings/feature-policy [get]
+func (h *Handler) GetFeaturePolicy(c *gin.Context) {
+	cfg := h.runtime.Snapshot()
+	response.Success(c, FeaturePolicyResponse{KnowledgeBaseEnabled: cfg.KnowledgeBaseEnabled})
+}
+
 // Patch godoc
 // @Summary 批量更新配置项
 // @Description 批量更新动态配置并清除缓存，下次读取自动刷新

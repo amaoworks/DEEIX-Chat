@@ -145,12 +145,12 @@ func (r *RuntimeSettings) applyItem(cfg *config.Config, item domainsettings.Syst
 		cfg.MaxContextMessages = toInt(item.Value, cfg.MaxContextMessages)
 	case "chat:context_max_turns":
 		cfg.ContextMaxTurns = toInt(item.Value, cfg.ContextMaxTurns)
-	case "chat:context_max_input_tokens":
-		cfg.ContextMaxInputTokens = toInt(item.Value, cfg.ContextMaxInputTokens)
 	case "chat:context_compact_enabled":
 		cfg.ContextCompactEnabled = toBool(item.Value, cfg.ContextCompactEnabled)
-	case "chat:context_compact_trigger_tokens":
-		cfg.ContextCompactTrigger = toInt(item.Value, cfg.ContextCompactTrigger)
+	case "chat:context_window_fallback_tokens":
+		cfg.ContextWindowFallbackTokens = toInt(item.Value, cfg.ContextWindowFallbackTokens)
+	case "chat:context_compact_trigger_percent":
+		cfg.ContextCompactTriggerPercent = toInt(item.Value, cfg.ContextCompactTriggerPercent)
 	case "chat:context_compact_preserve_recent_turns":
 		cfg.ContextCompactPreserve = toInt(item.Value, cfg.ContextCompactPreserve)
 	case "chat:conversation_default_model":
@@ -171,6 +171,10 @@ func (r *RuntimeSettings) applyItem(cfg *config.Config, item domainsettings.Syst
 		cfg.ModelOptionAllowedPaths = item.Value
 	case "chat:model_option_denied_paths":
 		cfg.ModelOptionDeniedPaths = item.Value
+
+		// 知识库配置
+	case "knowledgebase:enabled":
+		cfg.KnowledgeBaseEnabled = toBool(item.Value, cfg.KnowledgeBaseEnabled)
 
 		// 存储配置
 	case "storage:user_storage_quota_bytes":
@@ -417,6 +421,14 @@ func (r *RuntimeSettings) normalizeConfig(cfg *config.Config) {
 	}
 	if strings.TrimSpace(cfg.ModelOptionDeniedPaths) == "" {
 		cfg.ModelOptionDeniedPaths = config.DefaultModelOptionDeniedPathsJSON()
+	}
+	if cfg.ContextWindowFallbackTokens < config.MinContextWindowFallbackTokens || cfg.ContextWindowFallbackTokens > config.MaxContextWindowFallbackTokens {
+		cfg.ContextWindowFallbackTokens = config.DefaultContextWindowFallbackTokens
+	}
+	if cfg.ContextCompactTriggerPercent < 0 ||
+		cfg.ContextCompactTriggerPercent > config.MaxContextCompactTriggerPercent ||
+		(cfg.ContextCompactTriggerPercent > 0 && cfg.ContextCompactTriggerPercent < config.MinContextCompactTriggerPercent) {
+		cfg.ContextCompactTriggerPercent = config.DefaultContextCompactTriggerPercent
 	}
 	if cfg.MCPMaxSelectedToolsPerMessage <= 0 {
 		cfg.MCPMaxSelectedToolsPerMessage = config.DefaultMCPMaxSelectedToolsPerMessage

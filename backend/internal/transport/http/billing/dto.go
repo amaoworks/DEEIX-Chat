@@ -360,6 +360,8 @@ type BillingOverviewResponse struct {
 	PeriodRemainingUSD       float64                           `json:"periodRemainingUSD"`
 	PeriodRemainingNanousd   int64                             `json:"periodRemainingNanousd"`
 	Account                  *BillingAccountResponse           `json:"account" extensions:"x-nullable,!x-omitempty"`
+	TotalSpentUSD            float64                           `json:"totalSpentUSD"`
+	TotalSpentNanousd        int64                             `json:"totalSpentNanousd"`
 	SubscriptionEntitlements []SubscriptionEntitlementResponse `json:"subscriptionEntitlements"`
 }
 
@@ -490,10 +492,12 @@ type ModelPricingDataResponse struct {
 
 // OpenRouterOfficialPricingItemResponse OpenRouter 官方模型定价项。
 type OpenRouterOfficialPricingItemResponse struct {
-	ID            string                                       `json:"id"`
-	CanonicalSlug string                                       `json:"canonicalSlug"`
-	Name          string                                       `json:"name"`
-	Pricing       OpenRouterOfficialPricingUnitPricingResponse `json:"pricing"`
+	ID                  string                                       `json:"id"`
+	CanonicalSlug       string                                       `json:"canonicalSlug"`
+	Name                string                                       `json:"name"`
+	ContextLength       int                                          `json:"contextLength"`
+	MaxCompletionTokens int                                          `json:"maxCompletionTokens"`
+	Pricing             OpenRouterOfficialPricingUnitPricingResponse `json:"pricing"`
 }
 
 // OpenRouterOfficialPricingUnitPricingResponse OpenRouter 官方模型价格字段。
@@ -865,6 +869,8 @@ func toBillingOverviewResponse(item *appbilling.BillingOverview) BillingOverview
 		PeriodRemainingUSD:       nanousdToUSD(item.PeriodRemainingNanousd),
 		PeriodRemainingNanousd:   item.PeriodRemainingNanousd,
 		Account:                  toBillingAccountViewResponse(item.Account),
+		TotalSpentUSD:            nanousdToUSD(item.TotalSpentNanousd),
+		TotalSpentNanousd:        item.TotalSpentNanousd,
 		SubscriptionEntitlements: toSubscriptionEntitlementResponses(item.SubscriptionEntitlements),
 	}
 }

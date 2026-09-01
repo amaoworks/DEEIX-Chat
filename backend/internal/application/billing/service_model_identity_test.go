@@ -397,6 +397,9 @@ func (r *billingRepositoryStub) MarkPaymentOrderPaidAndCreditBalance(context.Con
 func (r *billingRepositoryStub) ListRedemptionCodes(context.Context, repository.RedemptionCodeListFilter, int, int) ([]domainbilling.RedemptionCode, int64, error) {
 	panic("not used")
 }
+func (r *billingRepositoryStub) ListRedemptions(context.Context, repository.RedemptionListFilter, int, int) ([]repository.RedemptionRecord, int64, error) {
+	panic("not used")
+}
 func (r *billingRepositoryStub) GetRedemptionCodeByID(context.Context, uint) (*domainbilling.RedemptionCode, error) {
 	panic("not used")
 }
@@ -437,6 +440,9 @@ func (r *billingRepositoryStub) ListDailyUsageByUser(context.Context, uint, time
 	panic("not used")
 }
 func (r *billingRepositoryStub) SumBillableNanousd(context.Context, uint, time.Time, time.Time) (int64, error) {
+	return 0, nil
+}
+func (r *billingRepositoryStub) SumTotalBilledNanousd(context.Context, uint) (int64, error) {
 	return 0, nil
 }
 
@@ -917,6 +923,9 @@ func TestBuildUsageLedgerAppliesAnthropicFastModeAndCacheRatesToServiceItems(t *
 	var snapshot map[string]interface{}
 	if err := json.Unmarshal([]byte(ledger.PricingSnapshotJSON), &snapshot); err != nil {
 		t.Fatalf("unmarshal pricing snapshot: %v", err)
+	}
+	if snapshot["service_only"] != true {
+		t.Fatalf("expected service-only marker, got %#v", snapshot["service_only"])
 	}
 	serviceItems, ok := snapshot["service_items"].([]interface{})
 	if !ok || len(serviceItems) != 1 {

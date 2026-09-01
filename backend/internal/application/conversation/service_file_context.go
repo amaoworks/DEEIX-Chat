@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	domainchannel "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/channel"
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainknowledgebase "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/knowledgebase"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
 )
 
 const (
@@ -234,7 +234,7 @@ func shouldUseRAGForAttachment(item AttachmentInput, fileMode string, cfg config
 			return true
 		}
 		if cfg.ContextTokenBudgetEnabled {
-			budget := llm.EffectiveContextBudgetFromCapabilities(capabilityModelName, capabilitiesJSON)
+			budget := domainchannel.EffectiveContextBudgetFromCapabilitiesWithFallback(capabilityModelName, capabilitiesJSON, cfg.ContextWindowFallbackTokens)
 			fileTokens := int(estimateTokens(item.ExtractedText))
 			return budget > 0 && fileTokens > budget*2/5
 		}
@@ -271,6 +271,10 @@ func (s *Service) resolveKnowledgeBaseRAGFiles(
 	ragAvailable bool,
 ) ([]model.FileObject, error) {
 	if len(publicIDs) == 0 {
+		return nil, nil
+	}
+	if !s.cfg.Snapshot().KnowledgeBaseEnabled {
+		// 知识库功能已被后台关闭：静默忽略引用，保证存量会话仍可正常发送。
 		return nil, nil
 	}
 	if !ragAvailable || s.knowledgeBaseResolver == nil || s.ragSvc == nil {

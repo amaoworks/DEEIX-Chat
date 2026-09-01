@@ -121,10 +121,13 @@ export interface AdminEmbeddingIndexStatus {
   needsReindex: boolean;
 }
 
-export async function getAdminEmbeddingStatus(accessToken: string): Promise<AdminEmbeddingIndexStatus> {
+export async function getAdminEmbeddingStatus(
+  accessToken: string,
+  signal?: AbortSignal,
+): Promise<AdminEmbeddingIndexStatus> {
   return authedRequest<AdminEmbeddingIndexStatus>(
     "/api/v1/admin/settings/embedding/status",
-    { accessToken },
+    { accessToken, signal },
     true,
   );
 }

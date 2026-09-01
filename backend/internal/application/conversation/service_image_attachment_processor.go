@@ -13,7 +13,8 @@ import (
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainmcp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/mcp"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/toolresult"
 )
 
 const (
@@ -45,6 +46,8 @@ type imageAttachmentProcessingResult struct {
 	Analyses              []imageAttachmentAnalysis
 	Rows                  []domainconversation.ToolCall
 	PersistedToolCallKeys map[string]struct{}
+	// MCPToolUsage 聚合附件处理器成功的 MCP 调用，与工具循环的计量口径一致。
+	MCPToolUsage []MCPToolUsageItem
 }
 
 func (s *Service) processImageAttachments(
@@ -123,13 +126,15 @@ func (s *Service) processImageAttachments(
 			return result, fmt.Errorf("%w: %v", ErrImageAttachmentProcessingFailed, validationErr)
 		}
 
-		mcpConfig, ok := input.Runtime.mcpConfigs[processor.modelName]
+		binding, ok := input.Runtime.mcpBindings[processor.modelName]
 		if !ok {
 			row.Status = "error"
 			row.ErrorJSON = "processor is not enabled for this run"
 			s.persistImageAttachmentToolRow(ctx, &row, &result)
 			return result, fmt.Errorf("%w: processor is not enabled", ErrImageAttachmentProcessingFailed)
 		}
+		row.MCPServerID = binding.ServerID
+		row.MCPServerName = binding.ServerName
 		startedAt := time.Now()
 		output, executeErr := s.executeToolCall(ctx, ExecuteToolInput{
 			UserID:         input.UserID,
@@ -137,19 +142,27 @@ func (s *Service) processImageAttachments(
 			RequestID:      input.RequestID,
 			ToolName:       processor.toolName,
 			ArgumentsJSON:  normalizedArguments,
-			MCPConfig:      &mcpConfig,
+			MCPConfig:      &binding.Config,
 		})
 		row.LatencyMS = max(time.Since(startedAt).Milliseconds(), 0)
 		if executeErr != nil {
 			row.Status = "error"
-			row.ErrorJSON = sanitizeOpaqueToolOutput(executeErr.Error())
+			row.ErrorJSON = toolresult.SanitizeOpaque(executeErr.Error())
 			s.persistImageAttachmentToolRow(ctx, &row, &result)
 			return result, fmt.Errorf("%w: %v", ErrImageAttachmentProcessingFailed, executeErr)
 		}
-		row.OutputJSON = sanitizeOpaqueToolOutput(output)
+		row.OutputJSON = toolresult.SanitizeOpaque(output)
 		if row.OutputJSON == "" {
 			row.OutputJSON = "{}"
 		}
+		// 上游调用已成功并产生费用，即使后续解析失败也应计量。
+		result.MCPToolUsage = mergeMCPToolUsage(result.MCPToolUsage, []MCPToolUsageItem{{
+			ServerID:     binding.ServerID,
+			ServerName:   binding.ServerName,
+			ToolName:     binding.ToolName,
+			CallCount:    1,
+			PriceNanousd: binding.PriceNanousd,
+		}})
 		analysis := imageAttachmentAnalysisText(output)
 		if analysis == "" {
 			row.Status = "error"

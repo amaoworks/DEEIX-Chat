@@ -15,11 +15,11 @@ import {
   useChatMentionMenu,
   type ChatMentionMenuKind,
 } from "@/features/chat/hooks/use-chat-mention-menu";
-import type { ChatModelOption } from "@/features/chat/types/chat-runtime";
+import type { ChatModelOption, PendingAttachment } from "@/features/chat/types/chat-runtime";
+import type { MCPToolDTO } from "@/shared/api/mcp.types";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { FileContentResult } from "@/shared/api/file";
-import type { PreviewDialogFile } from "@/shared/components/file-preview/preview-dialog";
+import type { FileContentLoader } from "@/shared/components/file-preview/preview-dialog";
 import { StreamdownRender } from "@/shared/components/markdown/streamdown-render";
 
 const USER_MESSAGE_COLLAPSED_LINES = 6;
@@ -30,15 +30,14 @@ const USER_MESSAGE_EXPAND_TRANSITION = {
   ease: [0.16, 1, 0.3, 1] as const,
 };
 const EDIT_MESSAGE_MENTION_KINDS: readonly ChatMentionMenuKind[] = ["model", "prompt"];
-const EDIT_MESSAGE_EMPTY_ATTACHMENTS = [];
-const EDIT_MESSAGE_EMPTY_TOOLS = [];
-const EDIT_MESSAGE_EMPTY_TOOL_IDS = [];
+const EDIT_MESSAGE_EMPTY_ATTACHMENTS: PendingAttachment[] = [];
+const EDIT_MESSAGE_EMPTY_TOOLS: MCPToolDTO[] = [];
+const EDIT_MESSAGE_EMPTY_TOOL_IDS: number[] = [];
 
 type ChatMessageUserProps = {
   item: ChatAreaMessage;
   onRetryUserMessage: (message: ChatAreaMessage) => Promise<void> | void;
   onEditUserMessage: (message: ChatAreaMessage, content: string) => Promise<boolean> | boolean;
-  onForkMessage?: (message: ChatAreaMessage) => Promise<void> | void;
   modelOptions?: ChatModelOption[];
   selectedPlatformModelName?: string;
   onModelChange?: (platformModelName: string) => void;
@@ -47,7 +46,7 @@ type ChatMessageUserProps = {
   onCopy: () => void;
   copySucceeded?: boolean;
   readOnly?: boolean;
-  attachmentContentLoader?: (file: PreviewDialogFile) => Promise<FileContentResult>;
+  attachmentContentLoader?: FileContentLoader;
   showBranchNavigator?: boolean;
   screenshotMeta?: React.ReactNode;
 };
@@ -56,7 +55,6 @@ export function ChatMessageUser({
   item,
   onRetryUserMessage,
   onEditUserMessage,
-  onForkMessage,
   modelOptions = [],
   selectedPlatformModelName = "",
   onModelChange = () => undefined,
@@ -137,11 +135,6 @@ export function ChatMessageUser({
     void onRetryUserMessage(item);
   }, [item, onRetryUserMessage]);
 
-  const onFork = React.useCallback(
-    () => onForkMessage?.(item),
-    [item, onForkMessage],
-  );
-
   const onEditSave = React.useCallback(async () => {
     const nextContent = editingValue.trim();
     if (!nextContent || nextContent === item.content.trim()) {
@@ -153,19 +146,24 @@ export function ChatMessageUser({
     }
   }, [editingValue, item, onEditUserMessage]);
   const {
-    activeIndex: mentionActiveIndex,
+    activeRowKey: mentionActiveRowKey,
+    activeTab: mentionActiveTab,
     handleBlur: handleMentionBlur,
     handleChange: handleMentionChange,
     handleFocus: handleMentionFocus,
     handleKeyDown: handleMentionKeyDown,
+    handleListScroll: handleMentionListScroll,
     handleSelectionChange: handleMentionSelectionChange,
     menuID: mentionMenuID,
     menuLayout: mentionMenuLayout,
     menuRef: mentionMenuRef,
     menuReady: mentionMenuReady,
     open: showMentionMenu,
-    sections: mentionSections,
+    rows: mentionRows,
     select: selectMentionItem,
+    selectTab: selectMentionTab,
+    showTabBar: showMentionTabBar,
+    tabs: mentionTabs,
   } = useChatMentionMenu({
     attachments: EDIT_MESSAGE_EMPTY_ATTACHMENTS,
     availableTools: EDIT_MESSAGE_EMPTY_TOOLS,
@@ -189,16 +187,6 @@ export function ChatMessageUser({
     placementPreference: "bottom",
     onSelectedToolsChange: () => undefined,
   });
-  const mentionSectionOffsets = React.useMemo(() => {
-    const offsets = new Map<ChatMentionMenuKind, number>();
-    let offset = 0;
-    for (const section of mentionSections) {
-      offsets.set(section.kind, offset);
-      offset += section.items.length;
-    }
-    return offsets;
-  }, [mentionSections]);
-
   if (!readOnly && isEditing) {
     const nextContent = editingValue.trim();
     const unchanged = nextContent === item.content.trim();
@@ -208,16 +196,20 @@ export function ChatMessageUser({
         <div className="w-full max-w-[640px] rounded-lg bg-muted/60 p-3 text-foreground">
           <div ref={editInputGroupRef}>
             <ChatMentionMenuPortal
-              activeIndex={mentionActiveIndex}
+              activeRowKey={mentionActiveRowKey}
+              activeTab={mentionActiveTab}
               menuID={mentionMenuID}
               menuLayout={mentionMenuLayout}
               menuRef={mentionMenuRef}
               menuReady={mentionMenuReady}
               open={showMentionMenu}
-              sectionOffsets={mentionSectionOffsets}
-              sections={mentionSections}
+              rows={mentionRows}
+              showTabBar={showMentionTabBar}
+              tabs={mentionTabs}
               t={tComposer}
+              onListScroll={handleMentionListScroll}
               onSelect={selectMentionItem}
+              onSelectTab={selectMentionTab}
             />
             <Textarea
               ref={editTextareaRef}
@@ -326,7 +318,6 @@ export function ChatMessageUser({
         onRetry={onRetry}
         onEdit={() => setIsEditing(true)}
         onCopy={onCopy}
-        onFork={onForkMessage ? onFork : undefined}
         copySucceeded={copySucceeded}
         readOnly={readOnly}
         alwaysVisible={readOnly}

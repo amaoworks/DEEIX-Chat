@@ -827,7 +827,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "从 storage 缓存读取 OpenRouter 模型定价；缓存不存在、过期或 refresh=true 时由后端刷新。",
+                "description": "从 storage 缓存读取 OpenRouter 模型标识、定价和上下文限制；缓存不存在、过期或 refresh=true 时由后端刷新。",
                 "consumes": [
                     "application/json"
                 ],
@@ -837,7 +837,7 @@ const docTemplate = `{
                 "tags": [
                     "admin-billing"
                 ],
-                "summary": "管理员获取 OpenRouter 官方模型定价",
+                "summary": "管理员获取 OpenRouter 官方模型目录",
                 "parameters": [
                     {
                         "type": "boolean",
@@ -1911,6 +1911,22 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "排序方式(default/name/created/updated/files)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "知识库ID",
+                        "name": "id",
+                        "in": "query"
+                    },
+                    {
                         "type": "boolean",
                         "description": "可用状态",
                         "name": "enabled",
@@ -2076,6 +2092,63 @@ const docTemplate = `{
                 }
             }
         },
+        "/admin/knowledge-bases/files/embeddings": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "为管理员选中的平台资料提交向量化任务，最多100个；重复提交会幂等跳过",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-knowledge-bases"
+                ],
+                "summary": "批量提交平台资料向量化",
+                "parameters": [
+                    {
+                        "description": "平台资料ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/SubmitPlatformFileEmbeddingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgeBaseFileEmbeddingSubmissionResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/admin/knowledge-bases/files/{file_id}": {
             "delete": {
                 "security": [
@@ -2184,6 +2257,34 @@ const docTemplate = `{
             }
         },
         "/admin/knowledge-bases/{id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "tags": [
+                    "admin-knowledge-bases"
+                ],
+                "summary": "查询内置知识库详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "知识库ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgeBaseResponseDoc"
+                        }
+                    }
+                }
+            },
             "delete": {
                 "security": [
                     {
@@ -2397,6 +2498,129 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/KnowledgeBaseFileMutationResponseDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/knowledge-bases/{id}/files/processing/snapshot": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-knowledge-bases"
+                ],
+                "summary": "查询内置知识库处理快照",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "知识库公开ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "当前页处理中或待确认的文件ID，最多100个，可为空",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetKnowledgeBaseFileProcessingSnapshotRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgeBaseFileProcessingSnapshotResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/knowledge-bases/{id}/files/processing/statuses": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin-knowledge-bases"
+                ],
+                "summary": "批量查询内置知识库文件处理状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "知识库ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "文件ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetKnowledgeBaseFileProcessingStatusesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/KnowledgeBaseFileProcessingStatusResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
                         }
                     }
                 }
@@ -4680,7 +4904,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "调用上游 models 接口，仅返回可导入预览，不直接落库",
+                "description": "调用上游 models 接口，返回可导入模型与目录变更预览，不直接落库",
                 "consumes": [
                     "application/json"
                 ],
@@ -4741,7 +4965,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "调用上游 models 接口写入上游真实模型清单，不自动绑定平台模型",
+                "description": "调用上游 models 接口获取完整目录，原子更新远端管理模型可用状态，不删除平台模型或路由配置",
                 "consumes": [
                     "application/json"
                 ],
@@ -4759,6 +4983,18 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "确认允许空模型目录对账",
+                        "name": "allow_empty",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "用户确认的远端目录快照标识",
+                        "name": "expected_snapshot",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4776,6 +5012,12 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ChannelErrorDoc"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "$ref": "#/definitions/ChannelErrorDoc"
                         }
@@ -6573,6 +6815,102 @@ const docTemplate = `{
                         "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/PromptPresetErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/admin/redemptions": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "管理员分页查看兑换码兑换明细，含奖励内容与余额变动，已删除兑换码的历史仍可查询",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "admin"
+                ],
+                "summary": "管理员查询兑换记录",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "页码",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页数量",
+                        "name": "page_size",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "搜索兑换流水号、兑换码摘要、兑换码备注",
+                        "name": "query",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "兑换码ID",
+                        "name": "code_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "用户ID",
+                        "name": "user_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "奖励类型(balance/subscription)",
+                        "name": "reward_type",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "兑换时间起点(RFC3339)",
+                        "name": "created_from",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "兑换时间终点(RFC3339)",
+                        "name": "created_to",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方式",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/RedemptionRecordListResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/AdminErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/AdminErrorDoc"
                         }
                     }
                 }
@@ -9616,6 +9954,91 @@ const docTemplate = `{
                 }
             }
         },
+        "/conversation-runs/statuses": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "按运行 ID 一次查询当前用户多个会话任务的最小状态快照",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "批量查询会话运行状态",
+                "parameters": [
+                    {
+                        "description": "运行ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetConversationRunStatusesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/ConversationRunStatusResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversation-runs/stream": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Sends an authoritative snapshot followed by live user-scoped run state events; the snapshot is re-sent periodically for client-side reconciliation",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "Stream active conversation generations",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/ActiveMessageGenerationEventResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/conversation-runs/{run_id}/cancel": {
             "post": {
                 "security": [
@@ -9687,7 +10110,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "boolean",
-                        "description": "是否返回可替换当前正文的权威文本快照",
+                        "description": "是否返回正文与当前思考轮次的权威内容快照",
                         "name": "snapshot",
                         "in": "query"
                     }
@@ -9701,6 +10124,68 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/conversation-runs/{run_id}/tool-calls/{tool_call_id}": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "查询当前用户指定会话运行内的持久化工具调用结果；超限字段仅返回原始大小与省略标记",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "查询工具调用结果详情",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "运行 ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "工具调用 ID",
+                        "name": "tool_call_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationToolCallDetailResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "$ref": "#/definitions/ConversationErrorDoc"
                         }
@@ -10371,6 +10856,64 @@ const docTemplate = `{
                 }
             }
         },
+        "/conversations/{id}/media/videos/extensions/stream": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "Conversations"
+                ],
+                "summary": "扩展会话视频",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "会话 Public ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "视频扩展请求",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/MediaVideoExtensionRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "NDJSON stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/Envelope"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/Envelope"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/Envelope"
+                        }
+                    }
+                }
+            }
+        },
         "/conversations/{id}/messages": {
             "get": {
                 "security": [
@@ -10626,7 +11169,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "将会话从开头到指定消息（含）的祖先链复制为一个新会话；不携带原会话的运行记录与计费，附件以引用方式复用",
+                "description": "仅允许从助手消息 fork；将会话从开头到指定助手消息（含）的祖先链复制为一个新会话，保留历史展示轨迹；不携带原会话的运行记录与计费，附件以引用方式复用",
                 "consumes": [
                     "application/json"
                 ],
@@ -11364,6 +11907,117 @@ const docTemplate = `{
                 }
             }
         },
+        "/files/embeddings": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "为当前用户已完成文本提取的文件提交向量化任务，最多100个；重复提交会幂等跳过",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "批量提交指定文件向量化",
+                "parameters": [
+                    {
+                        "description": "文件ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/SubmitFileEmbeddingsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/FileEmbeddingSubmissionResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/files/processing/statuses": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "一次查询当前用户多个文件的处理状态",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "批量查询文件处理状态",
+                "parameters": [
+                    {
+                        "description": "文件ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetFileProcessingStatusesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/FileProcessingStatusResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/files/{file_id}": {
             "delete": {
                 "security": [
@@ -11552,6 +12206,22 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "string",
+                        "description": "排序方式(default/name/created/updated/files)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "知识库ID",
+                        "name": "id",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "页码",
                         "name": "page",
@@ -11590,6 +12260,22 @@ const docTemplate = `{
                         "type": "string",
                         "description": "搜索关键词",
                         "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "排序方式(default/name/created/updated/files)",
+                        "name": "sort",
+                        "in": "query"
+                    },
+                    {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "collectionFormat": "csv",
+                        "description": "知识库ID",
+                        "name": "id",
                         "in": "query"
                     },
                     {
@@ -11934,6 +12620,129 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/KnowledgeBaseFilePageResponseDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/knowledge-bases/{id}/files/processing/snapshot": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge-bases"
+                ],
+                "summary": "查询当前用户可见知识库处理快照",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "知识库公开ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "当前页处理中或待确认的文件ID，最多100个，可为空",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetKnowledgeBaseFileProcessingSnapshotRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgeBaseFileProcessingSnapshotResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
+        "/knowledge-bases/{id}/files/processing/statuses": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "knowledge-bases"
+                ],
+                "summary": "批量查询知识库文件处理状态",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "知识库ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "文件ID，最多100个",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/GetKnowledgeBaseFileProcessingStatusesRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/KnowledgeBaseFileProcessingStatusResponse"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/KnowledgebaseErrorDoc"
                         }
                     }
                 }
@@ -12994,6 +13803,30 @@ const docTemplate = `{
                 }
             }
         },
+        "/settings/feature-policy": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "settings"
+                ],
+                "summary": "查询用户侧功能开关策略",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/Envelope"
+                        }
+                    }
+                }
+            }
+        },
         "/settings/login-page": {
             "get": {
                 "produces": [
@@ -13585,6 +14418,58 @@ const docTemplate = `{
                 }
             }
         },
+        "/temporary-chat/messages/stream": {
+            "post": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "由浏览器提交完整上下文和可选请求级附件；服务端不创建会话、消息、运行、文件或断线续传记录",
+                "consumes": [
+                    "application/json",
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/x-ndjson"
+                ],
+                "tags": [
+                    "chat"
+                ],
+                "summary": "流式发送临时对话消息",
+                "parameters": [
+                    {
+                        "description": "临时对话参数",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/TemporaryChatMessageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "NDJSON stream",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ConversationErrorDoc"
+                        }
+                    }
+                }
+            }
+        },
         "/user/settings": {
             "get": {
                 "security": [
@@ -13664,9 +14549,95 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/user/stats/activity": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "查询当前用户按计费归属日聚合的模型请求数与 token 消耗，逐日补零",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "user"
+                ],
+                "summary": "查询每日活跃度",
+                "parameters": [
+                    {
+                        "type": "integer",
+                        "description": "统计天数(默认365，最大366)",
+                        "name": "days",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/UserDailyActivityListResponseDoc"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/UserErrorDoc"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/UserErrorDoc"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
+        "ActiveMessageGenerationEventResponse": {
+            "type": "object",
+            "required": [
+                "type"
+            ],
+            "properties": {
+                "conversationPublicID": {
+                    "type": "string"
+                },
+                "runID": {
+                    "type": "string"
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/ActiveMessageGenerationResponse"
+                    }
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "ActiveMessageGenerationResponse": {
+            "type": "object",
+            "required": [
+                "conversationPublicID",
+                "runID"
+            ],
+            "properties": {
+                "conversationPublicID": {
+                    "type": "string"
+                },
+                "runID": {
+                    "type": "string"
+                }
+            }
+        },
         "ActiveSessionListResponse": {
             "type": "object",
             "required": [
@@ -15102,7 +16073,9 @@ const docTemplate = `{
                 "periodUsedNanousd",
                 "periodUsedUSD",
                 "plan",
-                "subscriptionEntitlements"
+                "subscriptionEntitlements",
+                "totalSpentNanousd",
+                "totalSpentUSD"
             ],
             "properties": {
                 "account": {
@@ -15159,6 +16132,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/SubscriptionEntitlementResponse"
                     }
+                },
+                "totalSpentNanousd": {
+                    "type": "integer"
+                },
+                "totalSpentUSD": {
+                    "type": "number"
                 }
             }
         },
@@ -16485,14 +17464,20 @@ const docTemplate = `{
                 "createdAt",
                 "endedAt",
                 "errorJSON",
+                "errorOmitted",
+                "errorSizeBytes",
                 "eventID",
                 "eventScope",
                 "eventType",
                 "id",
                 "inputJSON",
+                "inputOmitted",
+                "inputSizeBytes",
                 "latencyMS",
                 "messageID",
                 "outputJSON",
+                "outputOmitted",
+                "outputSizeBytes",
                 "parentEventID",
                 "payloadJSON",
                 "payloadOmitted",
@@ -16537,6 +17522,12 @@ const docTemplate = `{
                 "errorJSON": {
                     "type": "string"
                 },
+                "errorOmitted": {
+                    "type": "boolean"
+                },
+                "errorSizeBytes": {
+                    "type": "integer"
+                },
                 "eventID": {
                     "type": "string"
                 },
@@ -16552,6 +17543,12 @@ const docTemplate = `{
                 "inputJSON": {
                     "type": "string"
                 },
+                "inputOmitted": {
+                    "type": "boolean"
+                },
+                "inputSizeBytes": {
+                    "type": "integer"
+                },
                 "latencyMS": {
                     "type": "integer"
                 },
@@ -16560,6 +17557,12 @@ const docTemplate = `{
                 },
                 "outputJSON": {
                     "type": "string"
+                },
+                "outputOmitted": {
+                    "type": "boolean"
+                },
+                "outputSizeBytes": {
+                    "type": "integer"
                 },
                 "parentEventID": {
                     "type": "string"
@@ -16824,6 +17827,7 @@ const docTemplate = `{
                 "createdAt",
                 "defaultKnowledgeBaseIDs",
                 "defaultMCPToolIDs",
+                "defaultModel",
                 "defaultSkillIDs",
                 "description",
                 "icon",
@@ -16853,6 +17857,9 @@ const docTemplate = `{
                     "items": {
                         "type": "integer"
                     }
+                },
+                "defaultModel": {
+                    "type": "string"
                 },
                 "defaultSkillIDs": {
                     "type": "array",
@@ -17037,6 +18044,21 @@ const docTemplate = `{
                 }
             }
         },
+        "ConversationRunStatusResponse": {
+            "type": "object",
+            "required": [
+                "runID",
+                "status"
+            ],
+            "properties": {
+                "runID": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                }
+            }
+        },
         "ConversationSearchListResponseDoc": {
             "type": "object",
             "required": [
@@ -17169,6 +18191,68 @@ const docTemplate = `{
             "properties": {
                 "data": {
                     "$ref": "#/definitions/ConversationShareResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "ConversationToolCallDetailResponse": {
+            "type": "object",
+            "required": [
+                "errorJSON",
+                "errorOmitted",
+                "errorSizeBytes",
+                "outputJSON",
+                "outputOmitted",
+                "outputSizeBytes",
+                "runID",
+                "status",
+                "toolCallID",
+                "toolName"
+            ],
+            "properties": {
+                "errorJSON": {
+                    "type": "string"
+                },
+                "errorOmitted": {
+                    "type": "boolean"
+                },
+                "errorSizeBytes": {
+                    "type": "integer"
+                },
+                "outputJSON": {
+                    "type": "string"
+                },
+                "outputOmitted": {
+                    "type": "boolean"
+                },
+                "outputSizeBytes": {
+                    "type": "integer"
+                },
+                "runID": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "toolCallID": {
+                    "type": "string"
+                },
+                "toolName": {
+                    "type": "string"
+                }
+            }
+        },
+        "ConversationToolCallDetailResponseDoc": {
+            "type": "object",
+            "required": [
+                "data",
+                "errorMsg"
+            ],
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/ConversationToolCallDetailResponse"
                 },
                 "errorMsg": {
                     "type": "string"
@@ -17308,6 +18392,10 @@ const docTemplate = `{
                     "items": {
                         "type": "integer"
                     }
+                },
+                "defaultModel": {
+                    "type": "string",
+                    "maxLength": 128
                 },
                 "defaultSkillIDs": {
                     "type": "array",
@@ -18056,6 +19144,57 @@ const docTemplate = `{
                 }
             }
         },
+        "FileEmbeddingSkipResponse": {
+            "type": "object",
+            "required": [
+                "fileID",
+                "reason"
+            ],
+            "properties": {
+                "fileID": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "FileEmbeddingSubmissionResponse": {
+            "type": "object",
+            "required": [
+                "skipped",
+                "submittedFileIDs"
+            ],
+            "properties": {
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/FileEmbeddingSkipResponse"
+                    }
+                },
+                "submittedFileIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "FileEmbeddingSubmissionResponseDoc": {
+            "type": "object",
+            "required": [
+                "data",
+                "errorMsg"
+            ],
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/FileEmbeddingSubmissionResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "FileListResponse": {
             "type": "object",
             "required": [
@@ -18096,6 +19235,7 @@ const docTemplate = `{
         "FileObjectResponse": {
             "type": "object",
             "required": [
+                "canVectorize",
                 "chunkCount",
                 "createdAt",
                 "detectedMIME",
@@ -18117,9 +19257,13 @@ const docTemplate = `{
                 "sha256",
                 "sizeBytes",
                 "status",
-                "updatedAt"
+                "updatedAt",
+                "vectorizationReason"
             ],
             "properties": {
+                "canVectorize": {
+                    "type": "boolean"
+                },
                 "chunkCount": {
                     "type": "integer"
                 },
@@ -18189,6 +19333,108 @@ const docTemplate = `{
                 },
                 "updatedAt": {
                     "type": "string"
+                },
+                "vectorizationReason": {
+                    "type": "string"
+                }
+            }
+        },
+        "FileProcessingStatusResponse": {
+            "type": "object",
+            "required": [
+                "canVectorize",
+                "chunkCount",
+                "completedAt",
+                "detectedMIME",
+                "embedError",
+                "embedStatus",
+                "errorCode",
+                "errorMessage",
+                "extractChars",
+                "extractPages",
+                "extractStatus",
+                "fileCategory",
+                "fileID",
+                "ocrUsed",
+                "previewText",
+                "processingReady",
+                "processingStatus",
+                "ragReady",
+                "ragReason",
+                "startedAt",
+                "updatedAt",
+                "vectorizationReason"
+            ],
+            "properties": {
+                "canVectorize": {
+                    "type": "boolean"
+                },
+                "chunkCount": {
+                    "type": "integer"
+                },
+                "completedAt": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "x-omitempty": false
+                },
+                "detectedMIME": {
+                    "type": "string"
+                },
+                "embedError": {
+                    "type": "string"
+                },
+                "embedStatus": {
+                    "type": "string"
+                },
+                "errorCode": {
+                    "type": "string"
+                },
+                "errorMessage": {
+                    "type": "string"
+                },
+                "extractChars": {
+                    "type": "integer"
+                },
+                "extractPages": {
+                    "type": "integer"
+                },
+                "extractStatus": {
+                    "type": "string"
+                },
+                "fileCategory": {
+                    "type": "string"
+                },
+                "fileID": {
+                    "type": "string"
+                },
+                "ocrUsed": {
+                    "type": "boolean"
+                },
+                "previewText": {
+                    "type": "string"
+                },
+                "processingReady": {
+                    "type": "boolean"
+                },
+                "processingStatus": {
+                    "type": "string"
+                },
+                "ragReady": {
+                    "type": "boolean"
+                },
+                "ragReason": {
+                    "type": "string"
+                },
+                "startedAt": {
+                    "type": "string",
+                    "x-nullable": true,
+                    "x-omitempty": false
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "vectorizationReason": {
+                    "type": "string"
                 }
             }
         },
@@ -18223,6 +19469,69 @@ const docTemplate = `{
                 },
                 "reused": {
                     "type": "boolean"
+                }
+            }
+        },
+        "GetConversationRunStatusesRequest": {
+            "type": "object",
+            "required": [
+                "runIDs"
+            ],
+            "properties": {
+                "runIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "GetFileProcessingStatusesRequest": {
+            "type": "object",
+            "required": [
+                "fileIDs"
+            ],
+            "properties": {
+                "fileIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "GetKnowledgeBaseFileProcessingSnapshotRequest": {
+            "type": "object",
+            "required": [
+                "fileIDs"
+            ],
+            "properties": {
+                "fileIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "GetKnowledgeBaseFileProcessingStatusesRequest": {
+            "type": "object",
+            "required": [
+                "fileIDs"
+            ],
+            "properties": {
+                "fileIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -18786,6 +20095,57 @@ const docTemplate = `{
                 }
             }
         },
+        "KnowledgeBaseFileEmbeddingSkipResponse": {
+            "type": "object",
+            "required": [
+                "fileID",
+                "reason"
+            ],
+            "properties": {
+                "fileID": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            }
+        },
+        "KnowledgeBaseFileEmbeddingSubmissionResponse": {
+            "type": "object",
+            "required": [
+                "skipped",
+                "submittedFileIDs"
+            ],
+            "properties": {
+                "skipped": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/KnowledgeBaseFileEmbeddingSkipResponse"
+                    }
+                },
+                "submittedFileIDs": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "KnowledgeBaseFileEmbeddingSubmissionResponseDoc": {
+            "type": "object",
+            "required": [
+                "data",
+                "errorMsg"
+            ],
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/KnowledgeBaseFileEmbeddingSubmissionResponse"
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "KnowledgeBaseFileMutationDataResponse": {
             "type": "object",
             "required": [
@@ -18842,24 +20202,113 @@ const docTemplate = `{
                 }
             }
         },
+        "KnowledgeBaseFileProcessingSnapshotResponse": {
+            "type": "object",
+            "required": [
+                "knowledgeBase",
+                "statuses"
+            ],
+            "properties": {
+                "knowledgeBase": {
+                    "$ref": "#/definitions/KnowledgeBaseResponse"
+                },
+                "statuses": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/KnowledgeBaseFileProcessingStatusResponse"
+                    }
+                }
+            }
+        },
+        "KnowledgeBaseFileProcessingStatusResponse": {
+            "type": "object",
+            "required": [
+                "canVectorize",
+                "chunkCount",
+                "detectedMIME",
+                "embedError",
+                "embedStatus",
+                "extractStatus",
+                "fileCategory",
+                "fileID",
+                "processing",
+                "processingReady",
+                "processingStatus",
+                "ragOptOut",
+                "updatedAt",
+                "vectorizationReason"
+            ],
+            "properties": {
+                "canVectorize": {
+                    "type": "boolean"
+                },
+                "chunkCount": {
+                    "type": "integer"
+                },
+                "detectedMIME": {
+                    "type": "string"
+                },
+                "embedError": {
+                    "type": "string"
+                },
+                "embedStatus": {
+                    "type": "string"
+                },
+                "extractStatus": {
+                    "type": "string"
+                },
+                "fileCategory": {
+                    "type": "string"
+                },
+                "fileID": {
+                    "type": "string"
+                },
+                "processing": {
+                    "type": "boolean"
+                },
+                "processingReady": {
+                    "type": "boolean"
+                },
+                "processingStatus": {
+                    "type": "string"
+                },
+                "ragOptOut": {
+                    "type": "boolean"
+                },
+                "updatedAt": {
+                    "type": "string"
+                },
+                "vectorizationReason": {
+                    "type": "string"
+                }
+            }
+        },
         "KnowledgeBaseFileResponse": {
             "type": "object",
             "required": [
+                "canVectorize",
                 "chunkCount",
                 "createdAt",
                 "detectedMIME",
+                "embedError",
                 "embedStatus",
+                "extractStatus",
                 "fileCategory",
                 "fileID",
                 "fileName",
                 "mimeType",
+                "processing",
                 "processingReady",
                 "processingStatus",
                 "ragOptOut",
                 "sizeBytes",
-                "updatedAt"
+                "updatedAt",
+                "vectorizationReason"
             ],
             "properties": {
+                "canVectorize": {
+                    "type": "boolean"
+                },
                 "chunkCount": {
                     "type": "integer"
                 },
@@ -18869,7 +20318,13 @@ const docTemplate = `{
                 "detectedMIME": {
                     "type": "string"
                 },
+                "embedError": {
+                    "type": "string"
+                },
                 "embedStatus": {
+                    "type": "string"
+                },
+                "extractStatus": {
                     "type": "string"
                 },
                 "fileCategory": {
@@ -18884,6 +20339,9 @@ const docTemplate = `{
                 "mimeType": {
                     "type": "string"
                 },
+                "processing": {
+                    "type": "boolean"
+                },
                 "processingReady": {
                     "type": "boolean"
                 },
@@ -18897,6 +20355,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "updatedAt": {
+                    "type": "string"
+                },
+                "vectorizationReason": {
                     "type": "string"
                 }
             }
@@ -18954,6 +20415,7 @@ const docTemplate = `{
                 "enabled",
                 "fileCount",
                 "name",
+                "processingFileCount",
                 "publicID",
                 "readyFileCount",
                 "revision",
@@ -18976,6 +20438,9 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "processingFileCount": {
+                    "type": "integer"
                 },
                 "publicID": {
                     "type": "string"
@@ -19222,6 +20687,50 @@ const docTemplate = `{
                 },
                 "errorMsg": {
                     "type": "string"
+                }
+            }
+        },
+        "MediaVideoExtensionRequest": {
+            "type": "object",
+            "required": [
+                "prompt",
+                "sourceVideoFileID"
+            ],
+            "properties": {
+                "branchReason": {
+                    "type": "string",
+                    "enum": [
+                        "default",
+                        "retry",
+                        "edit"
+                    ]
+                },
+                "clientRunID": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "model": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "options": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "parentMessagePublicID": {
+                    "type": "string",
+                    "maxLength": 32
+                },
+                "prompt": {
+                    "type": "string"
+                },
+                "sourceMessagePublicID": {
+                    "type": "string",
+                    "maxLength": 32
+                },
+                "sourceVideoFileID": {
+                    "type": "string",
+                    "maxLength": 128
                 }
             }
         },
@@ -19735,6 +21244,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "stage": {
+                    "type": "string"
+                },
+                "startedAt": {
                     "type": "string"
                 },
                 "status": {
@@ -20405,7 +21917,8 @@ const docTemplate = `{
                         "chat",
                         "image_generation",
                         "image_edit",
-                        "video_generation"
+                        "video_generation",
+                        "video_extension"
                     ]
                 }
             }
@@ -20506,6 +22019,7 @@ const docTemplate = `{
                 "cbFailureThreshold",
                 "cbPolicyMode",
                 "cbWindowMin",
+                "contextWindow",
                 "createdAt",
                 "description",
                 "displayGroupID",
@@ -20546,6 +22060,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "cbWindowMin": {
+                    "type": "integer"
+                },
+                "contextWindow": {
                     "type": "integer"
                 },
                 "createdAt": {
@@ -21014,7 +22531,9 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "canonicalSlug",
+                "contextLength",
                 "id",
+                "maxCompletionTokens",
                 "name",
                 "pricing"
             ],
@@ -21022,8 +22541,14 @@ const docTemplate = `{
                 "canonicalSlug": {
                     "type": "string"
                 },
+                "contextLength": {
+                    "type": "integer"
+                },
                 "id": {
                     "type": "string"
+                },
+                "maxCompletionTokens": {
+                    "type": "integer"
                 },
                 "name": {
                     "type": "string"
@@ -22686,6 +24211,136 @@ const docTemplate = `{
                 }
             }
         },
+        "RedemptionRecordListResponseDoc": {
+            "type": "object",
+            "required": [
+                "data",
+                "errorMsg"
+            ],
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "required": [
+                        "results",
+                        "total"
+                    ],
+                    "properties": {
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/RedemptionRecordResponse"
+                            }
+                        },
+                        "total": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
+        "RedemptionRecordResponse": {
+            "type": "object",
+            "required": [
+                "balanceAfterNanousd",
+                "balanceBeforeNanousd",
+                "codeDescription",
+                "codeHint",
+                "codeID",
+                "codeStatus",
+                "createdAt",
+                "creditNanousd",
+                "creditUSD",
+                "durationDays",
+                "id",
+                "mode",
+                "planID",
+                "planName",
+                "refNo",
+                "rewardType",
+                "snapshotJSON",
+                "subscriptionID",
+                "userDisplayName",
+                "userID",
+                "userLabel",
+                "username"
+            ],
+            "properties": {
+                "balanceAfterNanousd": {
+                    "type": "integer",
+                    "x-nullable": true,
+                    "x-omitempty": false
+                },
+                "balanceBeforeNanousd": {
+                    "description": "BalanceBeforeNanousd / BalanceAfterNanousd 来自余额流水；订阅类兑换无流水时为 null。",
+                    "type": "integer",
+                    "x-nullable": true,
+                    "x-omitempty": false
+                },
+                "codeDescription": {
+                    "type": "string"
+                },
+                "codeHint": {
+                    "type": "string"
+                },
+                "codeID": {
+                    "type": "integer"
+                },
+                "codeStatus": {
+                    "type": "string"
+                },
+                "createdAt": {
+                    "type": "string"
+                },
+                "creditNanousd": {
+                    "type": "integer"
+                },
+                "creditUSD": {
+                    "type": "number"
+                },
+                "durationDays": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "integer"
+                },
+                "mode": {
+                    "type": "string"
+                },
+                "planID": {
+                    "type": "integer"
+                },
+                "planName": {
+                    "type": "string"
+                },
+                "refNo": {
+                    "type": "string"
+                },
+                "rewardType": {
+                    "type": "string"
+                },
+                "snapshotJSON": {
+                    "type": "string"
+                },
+                "subscriptionID": {
+                    "type": "integer"
+                },
+                "userDisplayName": {
+                    "type": "string"
+                },
+                "userID": {
+                    "type": "integer"
+                },
+                "userLabel": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
         "RedemptionResponse": {
             "type": "object",
             "required": [
@@ -23800,6 +25455,38 @@ const docTemplate = `{
                 }
             }
         },
+        "SubmitFileEmbeddingsRequest": {
+            "type": "object",
+            "required": [
+                "fileIDs"
+            ],
+            "properties": {
+                "fileIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "SubmitPlatformFileEmbeddingsRequest": {
+            "type": "object",
+            "required": [
+                "fileIDs"
+            ],
+            "properties": {
+                "fileIDs": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "SubscribeRequest": {
             "type": "object",
             "required": [
@@ -23978,9 +25665,14 @@ const docTemplate = `{
                 "createdUpstreamModels",
                 "existingUpstreamModels",
                 "inactivatedModels",
+                "protectedUpstreamModels",
+                "reactivatedModels",
                 "skippedUpstreamModels",
+                "snapshotID",
                 "syncedModels",
-                "totalUpstream"
+                "totalUpstream",
+                "unchangedUpstreamModels",
+                "updatedUpstreamModels"
             ],
             "properties": {
                 "createdUpstreamModels": {
@@ -23992,8 +25684,17 @@ const docTemplate = `{
                 "inactivatedModels": {
                     "type": "integer"
                 },
+                "protectedUpstreamModels": {
+                    "type": "integer"
+                },
+                "reactivatedModels": {
+                    "type": "integer"
+                },
                 "skippedUpstreamModels": {
                     "type": "integer"
+                },
+                "snapshotID": {
+                    "type": "string"
                 },
                 "syncedModels": {
                     "type": "array",
@@ -24002,6 +25703,12 @@ const docTemplate = `{
                     }
                 },
                 "totalUpstream": {
+                    "type": "integer"
+                },
+                "unchangedUpstreamModels": {
+                    "type": "integer"
+                },
+                "updatedUpstreamModels": {
                     "type": "integer"
                 }
             }
@@ -24106,6 +25813,85 @@ const docTemplate = `{
                 }
             }
         },
+        "TemporaryChatHistoryMessage": {
+            "type": "object",
+            "required": [
+                "content",
+                "role"
+            ],
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "maxLength": 200000
+                },
+                "role": {
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "assistant"
+                    ]
+                }
+            }
+        },
+        "TemporaryChatMessageRequest": {
+            "type": "object",
+            "required": [
+                "clientRunID",
+                "messages",
+                "model",
+                "sessionID"
+            ],
+            "properties": {
+                "clientRunID": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "htmlVisualPrompt": {
+                    "type": "boolean"
+                },
+                "knowledgeBaseIDs": {
+                    "type": "array",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "messages": {
+                    "type": "array",
+                    "maxItems": 100,
+                    "minItems": 1,
+                    "items": {
+                        "$ref": "#/definitions/TemporaryChatHistoryMessage"
+                    }
+                },
+                "model": {
+                    "type": "string",
+                    "maxLength": 128
+                },
+                "options": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "selectedToolIDs": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "sessionID": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "skillIDs": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "type": "integer"
+                    }
+                }
+            }
+        },
         "ToolListResponse": {
             "type": "object",
             "required": [
@@ -24148,6 +25934,7 @@ const docTemplate = `{
                 "id",
                 "inputSchemaJSON",
                 "name",
+                "priceNanousd",
                 "serverID",
                 "serverName",
                 "sortOrder",
@@ -24193,6 +25980,9 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "priceNanousd": {
+                    "type": "integer"
                 },
                 "serverID": {
                     "type": "integer"
@@ -24332,6 +26122,10 @@ const docTemplate = `{
                     "items": {
                         "type": "integer"
                     }
+                },
+                "defaultModel": {
+                    "type": "string",
+                    "maxLength": 128
                 },
                 "defaultSkillIDs": {
                     "type": "array",
@@ -24667,6 +26461,11 @@ const docTemplate = `{
                 },
                 "displayName": {
                     "type": "string"
+                },
+                "priceNanousd": {
+                    "description": "PriceNanousd 单次调用价格（nano USD），0 表示不单独计费。",
+                    "type": "integer",
+                    "minimum": 0
                 },
                 "status": {
                     "type": "string"
@@ -25351,6 +27150,55 @@ const docTemplate = `{
                 }
             }
         },
+        "UpstreamModelSyncPlanResponse": {
+            "type": "object",
+            "required": [
+                "addedModels",
+                "inactivatedModels",
+                "protectedModels",
+                "reactivatedModels",
+                "unchangedModels",
+                "updatedModels"
+            ],
+            "properties": {
+                "addedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "inactivatedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "protectedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "reactivatedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "unchangedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "updatedModels": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "UpstreamRemoteModelResponse": {
             "type": "object",
             "required": [
@@ -25408,6 +27256,8 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "items",
+                "snapshotID",
+                "syncPlan",
                 "total"
             ],
             "properties": {
@@ -25416,6 +27266,12 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/UpstreamRemoteModelResponse"
                     }
+                },
+                "snapshotID": {
+                    "type": "string"
+                },
+                "syncPlan": {
+                    "$ref": "#/definitions/UpstreamModelSyncPlanResponse"
                 },
                 "total": {
                     "type": "integer"
@@ -25545,8 +27401,11 @@ const docTemplate = `{
                 "bindingCode",
                 "created",
                 "kindsJSON",
+                "protected",
+                "reactivated",
                 "status",
                 "suggestedProtocol",
+                "updated",
                 "upstreamModelName"
             ],
             "properties": {
@@ -25559,11 +27418,20 @@ const docTemplate = `{
                 "kindsJSON": {
                     "type": "string"
                 },
+                "protected": {
+                    "type": "boolean"
+                },
+                "reactivated": {
+                    "type": "boolean"
+                },
                 "status": {
                     "type": "string"
                 },
                 "suggestedProtocol": {
                     "type": "string"
+                },
+                "updated": {
+                    "type": "boolean"
                 },
                 "upstreamModelName": {
                     "type": "string"
@@ -26479,6 +28347,43 @@ const docTemplate = `{
                 }
             }
         },
+        "UserDailyActivityItem": {
+            "type": "object",
+            "required": [
+                "date",
+                "requestCount",
+                "tokenUsage"
+            ],
+            "properties": {
+                "date": {
+                    "type": "string"
+                },
+                "requestCount": {
+                    "type": "integer"
+                },
+                "tokenUsage": {
+                    "type": "integer"
+                }
+            }
+        },
+        "UserDailyActivityListResponseDoc": {
+            "type": "object",
+            "required": [
+                "data",
+                "errorMsg"
+            ],
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/UserDailyActivityItem"
+                    }
+                },
+                "errorMsg": {
+                    "type": "string"
+                }
+            }
+        },
         "UserDataResponse": {
             "type": "object",
             "required": [
@@ -26487,6 +28392,17 @@ const docTemplate = `{
             "properties": {
                 "user": {
                     "$ref": "#/definitions/AdminUserResponse"
+                }
+            }
+        },
+        "UserErrorDoc": {
+            "type": "object",
+            "required": [
+                "errorMsg"
+            ],
+            "properties": {
+                "errorMsg": {
+                    "type": "string"
                 }
             }
         },
@@ -26734,7 +28650,7 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "0.3.6",
+	Version:          "0.4.0",
 	Host:             "",
 	BasePath:         "/api/v1",
 	Schemes:          []string{},

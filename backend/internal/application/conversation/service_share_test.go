@@ -83,12 +83,13 @@ func TestOrderSharedMessagesForCloneMakesDefaultBranchLatest(t *testing.T) {
 
 func TestSanitizeSharedTracePayloadJSONRemovesInternalFields(t *testing.T) {
 	got := sanitizeSharedTracePayloadJSON(`{
-		"tool_calls": [{"tool_call_id":"call_1","output":"ok"}],
+		"tool_calls": [{"tool_call_id":"call_1","call_id":"provider_call_1","detail_run_id":"run_1","output":"ok"}],
+		"toolCalls": [{"toolCallID":"call_2","detailRunID":"run_2","output":"also ok"}],
 		"upstream_debug": {"authorization":"Bearer token"},
 		"upstream": {"name":"hidden","model":"visible"},
 		"api_key": "secret"
 	}`)
-	want := `{"tool_calls":[{"output":"ok","tool_call_id":"call_1"}],"upstream":{"model":"visible"}}`
+	want := `{"toolCalls":[{"output":"also ok"}],"tool_calls":[{"output":"ok"}],"upstream":{"model":"visible"}}`
 	if got != want {
 		t.Fatalf("sanitized payload mismatch: got %s, want %s", got, want)
 	}

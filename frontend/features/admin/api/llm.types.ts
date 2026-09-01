@@ -13,8 +13,8 @@ import type {
   ModelDataResponse,
   ModelDisplayGroupDataResponse,
   ModelDisplayGroupResponse,
-  ModelIconAssetResponse,
   ModelIconAssetListItemResponse,
+  ModelIconAssetResponse,
   ModelProbeBatchResponse,
   ModelProbeDebugRequestResponse,
   ModelProbeDebugResponse,
@@ -23,13 +23,17 @@ import type {
   ModelResponse,
   ModelUpstreamSourceDataResponse,
   ModelUpstreamSourceResponse,
+  ModelVendorDataResponse,
+  ModelVendorDeleteConflictDetails,
+  ModelVendorResponse,
   ReorderModelsRequest,
   SetModelProtocolsRequest,
   SetModelsDisplayGroupRequest,
+  SyncUpstreamModelsResponse,
   UpdateModelDisplayGroupRequest,
   UpdateModelRequest,
-  UpdateModelVendorRequest,
   UpdateModelUpstreamSourceRequest,
+  UpdateModelVendorRequest,
   UpdateUpstreamRequest,
   UpsertUpstreamModelRequest,
   UpstreamAPIKeyResponse,
@@ -39,9 +43,6 @@ import type {
   UpstreamRemoteModelResponse,
   UpstreamRemoteModelsResponse,
   UpstreamResponse,
-  ModelVendorDataResponse,
-  ModelVendorDeleteConflictDetails,
-  ModelVendorResponse,
 } from "@deeix/api-contract";
 
 export type AdminLLMStatus = "active" | "inactive";
@@ -61,7 +62,8 @@ export type AdminLLMAdapter =
   | "xai_responses"
   | "xai_image"
   | "xai_image_edits"
-  | "xai_video";
+  | "xai_video"
+  | "xai_video_extensions";
 export type AdminLLMModelVendor = string;
 export type AdminLLMCompatible =
   | "openai"
@@ -304,6 +306,8 @@ export type ResetAdminLLMCircuitData = CircuitResetResponse;
 export type ListAdminLLMRemoteModelsData = Omit<UpstreamRemoteModelsResponse, "items"> & {
   items: AdminLLMRemoteModelItem[];
 };
+
+export type SyncAdminLLMUpstreamModelsData = SyncUpstreamModelsResponse;
 
 export type ImportAdminLLMUpstreamModelsData = Omit<ImportUpstreamModelsResponse, "results"> & {
   results: Array<

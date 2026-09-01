@@ -994,6 +994,74 @@ func TestAddPeriodUsageAndSettleOverageUsesBillingAtForPeriodBoundary(t *testing
 	}
 }
 
+func TestSumTotalBilledNanousdAggregatesLifetimePaidUsage(t *testing.T) {
+	db := openBillingSQLiteTestDB(t)
+	repo := NewRepo(db)
+	ctx := context.Background()
+
+	// 跨年份的付费流水应全部计入;免费模型流水与其他用户流水应排除。
+	ledgers := []model.UsageLedger{
+		{
+			UserID:              1,
+			PlatformModelName:   "gpt-early",
+			BillingAt:           time.Date(2025, 1, 2, 8, 0, 0, 0, time.UTC),
+			UsageDate:           time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC),
+			BilledCurrency:      "USD",
+			BilledNanousd:       800,
+			PricingSnapshotJSON: `{}`,
+		},
+		{
+			UserID:              1,
+			PlatformModelName:   "gpt-recent",
+			BillingAt:           time.Date(2026, 8, 1, 8, 0, 0, 0, time.UTC),
+			UsageDate:           time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+			BilledCurrency:      "USD",
+			BilledNanousd:       500,
+			PricingSnapshotJSON: `{}`,
+		},
+		{
+			UserID:              1,
+			PlatformModelName:   "gpt-free",
+			IsFreeModel:         true,
+			BillingAt:           time.Date(2026, 8, 2, 8, 0, 0, 0, time.UTC),
+			UsageDate:           time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+			BilledCurrency:      "USD",
+			BilledNanousd:       300,
+			PricingSnapshotJSON: `{}`,
+		},
+		{
+			UserID:              2,
+			PlatformModelName:   "gpt-other-user",
+			BillingAt:           time.Date(2026, 8, 3, 8, 0, 0, 0, time.UTC),
+			UsageDate:           time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC),
+			BilledCurrency:      "USD",
+			BilledNanousd:       900,
+			PricingSnapshotJSON: `{}`,
+		},
+	}
+	for i := range ledgers {
+		if err := db.Create(&ledgers[i]).Error; err != nil {
+			t.Fatalf("create usage ledger %d: %v", i, err)
+		}
+	}
+
+	total, err := repo.SumTotalBilledNanousd(ctx, 1)
+	if err != nil {
+		t.Fatalf("SumTotalBilledNanousd() error = %v", err)
+	}
+	if total != 1300 {
+		t.Fatalf("total = %d, want 1300", total)
+	}
+
+	empty, err := repo.SumTotalBilledNanousd(ctx, 3)
+	if err != nil {
+		t.Fatalf("SumTotalBilledNanousd() empty user error = %v", err)
+	}
+	if empty != 0 {
+		t.Fatalf("empty user total = %d, want 0", empty)
+	}
+}
+
 func TestValidateRedeemableCodeAllowsUsageCodeInPeriodModeOnly(t *testing.T) {
 	db := openBillingSQLiteTestDB(t)
 	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)

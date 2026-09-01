@@ -18,8 +18,8 @@ import (
 	domainknowledgebase "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/knowledgebase"
 	domainmemory "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/memory"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 )
 
 func TestFileContextPlanRAGObjectsPreservesFileRevision(t *testing.T) {
@@ -88,6 +88,7 @@ func TestBindAttachmentMessageRolesPrefersUserOwnership(t *testing.T) {
 
 func TestResolveKnowledgeBaseRAGFilesFiltersAndDeduplicatesReadyFiles(t *testing.T) {
 	service := &Service{
+		cfg:    config.NewRuntime(config.Config{KnowledgeBaseEnabled: true}),
 		ragSvc: &apprag.Service{},
 		knowledgeBaseResolver: knowledgeBaseResolverStub{resolveFiles: func(context.Context, uint, []string) ([]domainknowledgebase.KnowledgeBase, []model.FileObject, error) {
 			return []domainknowledgebase.KnowledgeBase{{PublicID: "kb-one", ReadyFileCount: 1}}, []model.FileObject{
@@ -109,6 +110,7 @@ func TestResolveKnowledgeBaseRAGFilesFiltersAndDeduplicatesReadyFiles(t *testing
 
 func TestResolveKnowledgeBaseRAGFilesMapsUnavailableReference(t *testing.T) {
 	service := &Service{
+		cfg:    config.NewRuntime(config.Config{KnowledgeBaseEnabled: true}),
 		ragSvc: &apprag.Service{},
 		knowledgeBaseResolver: knowledgeBaseResolverStub{resolveFiles: func(context.Context, uint, []string) ([]domainknowledgebase.KnowledgeBase, []model.FileObject, error) {
 			return nil, nil, domainknowledgebase.ErrReferenceUnavailable
@@ -118,6 +120,25 @@ func TestResolveKnowledgeBaseRAGFilesMapsUnavailableReference(t *testing.T) {
 	_, err := service.resolveKnowledgeBaseRAGFiles(context.Background(), 11, []string{"missing"}, true)
 	if !errors.Is(err, ErrInvalidKnowledgeBaseReference) {
 		t.Fatalf("resolveKnowledgeBaseRAGFiles() error = %v, want ErrInvalidKnowledgeBaseReference", err)
+	}
+}
+
+func TestResolveKnowledgeBaseRAGFilesSkipsWhenFeatureDisabled(t *testing.T) {
+	service := &Service{
+		cfg:    config.NewRuntime(config.Config{KnowledgeBaseEnabled: false}),
+		ragSvc: &apprag.Service{},
+		knowledgeBaseResolver: knowledgeBaseResolverStub{resolveFiles: func(context.Context, uint, []string) ([]domainknowledgebase.KnowledgeBase, []model.FileObject, error) {
+			t.Fatal("resolver should not be called when knowledge base feature is disabled")
+			return nil, nil, nil
+		}},
+	}
+
+	files, err := service.resolveKnowledgeBaseRAGFiles(context.Background(), 11, []string{"kb-one"}, true)
+	if err != nil {
+		t.Fatalf("resolveKnowledgeBaseRAGFiles() error = %v", err)
+	}
+	if files != nil {
+		t.Fatalf("resolved files = %#v, want nil when feature disabled", files)
 	}
 }
 

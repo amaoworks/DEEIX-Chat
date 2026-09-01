@@ -112,6 +112,11 @@ type ChatContextPolicyResponse struct {
 	ContextCompactEnabled bool `json:"contextCompactEnabled"`
 }
 
+// FeaturePolicyResponse 返回用户侧功能开关策略。
+type FeaturePolicyResponse struct {
+	KnowledgeBaseEnabled bool `json:"knowledgeBaseEnabled"`
+}
+
 // ── mapping 函数 ─────────────────────────────────────────────────────────────
 
 func toAppPatchItems(items []PatchItem) []appsettings.PatchItem {

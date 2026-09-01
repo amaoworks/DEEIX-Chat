@@ -70,9 +70,9 @@ func defaultSettings() []domainsettings.SystemSetting {
 		// 对话配置
 		{Namespace: "chat", Key: "max_context_messages", Value: "20", ValueType: "int", Description: "上下文消息数"},
 		{Namespace: "chat", Key: "context_max_turns", Value: "48", ValueType: "int", Description: "最大对话轮次"},
-		{Namespace: "chat", Key: "context_max_input_tokens", Value: "32000", ValueType: "int", Description: "最大输入 token"},
 		{Namespace: "chat", Key: "context_compact_enabled", Value: "false", ValueType: "bool", Description: "是否允许上下文压缩功能"},
-		{Namespace: "chat", Key: "context_compact_trigger_tokens", Value: "65536", ValueType: "int", Description: "压缩触发阈值"},
+		{Namespace: "chat", Key: "context_window_fallback_tokens", Value: strconv.Itoa(config.DefaultContextWindowFallbackTokens), ValueType: "int", Description: "无法识别模型上下文窗口时使用的默认 Token 数"},
+		{Namespace: "chat", Key: "context_compact_trigger_percent", Value: strconv.Itoa(config.DefaultContextCompactTriggerPercent), ValueType: "int", Description: "达到当前模型有效上下文预算的指定百分比时触发压缩；0 表示关闭按 Token 触发"},
 		{Namespace: "chat", Key: "context_compact_preserve_recent_turns", Value: "8", ValueType: "int", Description: "压缩保留轮次"},
 		{Namespace: "chat", Key: "conversation_default_model", Value: "", ValueType: "string", Description: "新会话系统推荐模型；留空时回退到第一个可用模型"},
 		{Namespace: "chat", Key: "conversation_task_model", Value: "follow", ValueType: "string", Description: "会话标题/标签生成任务使用的聊天模型，follow 表示跟随当前会话模型；图片模型不会用于标题/标签生成"},
@@ -83,6 +83,9 @@ func defaultSettings() []domainsettings.SystemSetting {
 		{Namespace: "chat", Key: "model_option_policy_mode", Value: "allowlist", ValueType: "string", Description: "模型 options 透传策略：allowlist=仅白名单，denylist=黑名单拦截，disabled=禁止透传"},
 		{Namespace: "chat", Key: "model_option_allowed_paths", Value: config.DefaultModelOptionAllowedPathsJSON(), ValueType: "json", Description: "模型 options 白名单路径 JSON，default 对所有协议生效"},
 		{Namespace: "chat", Key: "model_option_denied_paths", Value: config.DefaultModelOptionDeniedPathsJSON(), ValueType: "json", Description: "模型 options 黑名单路径 JSON，default 对所有协议生效"},
+
+		// 知识库配置
+		{Namespace: "knowledgebase", Key: "enabled", Value: "true", ValueType: "bool", Description: "是否启用知识库功能；关闭后隐藏用户侧入口并拒绝知识库请求"},
 
 		// 存储配置
 		{Namespace: "storage", Key: "user_storage_quota_bytes", Value: "104857600", ValueType: "int", Description: "用户总存储配额（管理页面按 MB 输入，内部以字节保存），0表示不限制"},
@@ -214,5 +217,7 @@ func obsoleteSettings() []domainsettings.SystemSetting {
 	return []domainsettings.SystemSetting{
 		{Namespace: "mcp", Key: "mcp_connect_timeout_ms"},
 		{Namespace: "mcp", Key: "mcp_tool_timeout_ms"},
+		{Namespace: "chat", Key: "context_max_input_tokens"},
+		{Namespace: "chat", Key: "context_compact_trigger_tokens"},
 	}
 }

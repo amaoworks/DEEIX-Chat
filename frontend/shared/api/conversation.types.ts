@@ -5,10 +5,13 @@ import type {
   CreateConversationProjectRequest as ContractCreateConversationProjectRequest,
   CreateConversationRequest as ContractCreateConversationRequest,
   CreateConversationShareRequest as ContractCreateConversationShareRequest,
+  MediaVideoExtensionRequest as ContractMediaVideoExtensionRequest,
   RenameConversationRequest as ContractRenameConversationRequest,
   ReorderConversationProjectsRequest as ContractReorderConversationProjectsRequest,
   RevokeConversationSharesRequest as ContractRevokeConversationSharesRequest,
   SendMessageRequest as ContractSendMessageRequest,
+  TemporaryChatHistoryMessage as ContractTemporaryChatHistoryMessage,
+  TemporaryChatMessageRequest as ContractTemporaryChatMessageRequest,
   SetConversationArchiveRequest as ContractSetConversationArchiveRequest,
   SetConversationProjectRequest as ContractSetConversationProjectRequest,
   SetConversationStarRequest as ContractSetConversationStarRequest,
@@ -25,6 +28,7 @@ import type {
   ConversationSearchPageResponse,
   ConversationSearchResultResponse,
   ConversationShareResponse,
+  ConversationToolCallDetailResponse,
   MessageBillingCostResponse,
   MessageFeedbackResponse,
   MessageProcessTraceResponse,
@@ -38,6 +42,7 @@ import type {
   PublicSharedConversationResponse,
   PublicSharedMessageResponse,
   RevokeConversationSharesResponse,
+  ConversationRunStatusResponse,
   RunResponse,
   SendMessageResponse,
 } from "@deeix/api-contract";
@@ -46,6 +51,15 @@ import type { UserStorageQuotaDTO } from "@/shared/api/file.types";
 export type ConversationDTO = ConversationResponse;
 
 export type ConversationSearchResultDTO = ConversationSearchResultResponse;
+
+export type ActiveConversationRunSnapshot = {
+  runID: string;
+  conversationPublicID: string;
+};
+
+export type ActiveConversationRunEvent =
+  | { type: "snapshot"; runs: ActiveConversationRunSnapshot[] }
+  | { type: "started" | "finished"; runID: string; conversationPublicID?: string };
 
 export type ConversationSearchPageDTO = Omit<ConversationSearchPageResponse, "results"> & {
   results: ConversationSearchResultDTO[];
@@ -87,6 +101,8 @@ export type MessageDTO = Omit<
 
 export type ConversationRunDTO = Omit<RunResponse, "taskType">;
 
+export type ConversationRunStatusDTO = ConversationRunStatusResponse;
+
 export type ConversationExportDTO = Omit<
   ConversationExportResponse,
   "compatibility" | "conversation" | "messages" | "runs"
@@ -108,6 +124,8 @@ export type PromptTraceBlockDTO = Omit<MessagePromptTraceBlockResponse, "sourceR
 export type PromptTraceSourceDTO = MessagePromptTraceSourceResponse;
 
 export type ContextArtifactDTO = ContextArtifactResponse;
+
+export type ConversationToolCallDetailDTO = ConversationToolCallDetailResponse;
 
 export type PromptTraceDTO = Omit<MessagePromptTraceResponse, "blocks"> & {
   blocks: PromptTraceBlockDTO[];
@@ -220,10 +238,24 @@ export type MediaVideoRequest = {
   branchReason?: "default" | "retry" | "edit";
 };
 
+export type MediaVideoExtensionRequest = Omit<ContractMediaVideoExtensionRequest, "options"> & {
+  options?: ConversationOptions;
+};
+
 export type SendMessageResult = Omit<SendMessageResponse, "assistantMessage" | "metadataRefreshHint" | "userMessage"> & {
   userMessage: MessageDTO;
   assistantMessage: MessageDTO;
   metadataRefreshHint?: "pending" | "not_needed" | "skipped_no_titleable_content" | string;
+};
+
+export type TemporaryChatHistoryMessage = Omit<ContractTemporaryChatHistoryMessage, "content" | "role"> & {
+  role: "user" | "assistant";
+  content: string;
+};
+
+export type TemporaryChatMessageRequest = Omit<ContractTemporaryChatMessageRequest, "messages" | "options"> & {
+  options?: ConversationOptions;
+  messages: TemporaryChatHistoryMessage[];
 };
 
 export type StreamMessageEvent =
@@ -253,6 +285,8 @@ export type StreamMessageEvent =
       stage?: string;
       roundID?: string;
       eventID?: string;
+      startedAt?: string;
+      endedAt?: string;
       kind?: ReasoningDeltaDTO["kind"] | string;
       delta?: string;
       contentMarkdown?: string;
@@ -317,6 +351,7 @@ export type StreamMessageEvent =
   | {
       type: "error";
       seq?: number;
+      status?: number;
       message: string;
       errorCode?: string;
       debug?: UpstreamDebugInfo;
