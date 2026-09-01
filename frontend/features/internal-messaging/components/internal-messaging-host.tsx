@@ -46,6 +46,7 @@ import {
 } from "@/features/internal-messaging/model/live-event-merge";
 import { safeInternalMessageMarkdown } from "@/features/internal-messaging/model/message-markdown";
 import { messageRowContainmentStyle } from "@/features/internal-messaging/model/message-row-visibility";
+import { useInternalMessagingEvents } from "@/features/internal-messaging/components/use-internal-messaging-events";
 import { cn } from "@/lib/utils";
 import {
   deleteInternalMessagingMessage,
@@ -56,7 +57,6 @@ import {
   listInternalMessagingMessages,
   listInternalMessagingUsers,
   markInternalMessagingRead,
-  openInternalMessagingEvents,
   replyInternalMessagingMessage,
   searchInternalMessagingMessages,
   sendInternalMessagingFile,
@@ -97,22 +97,6 @@ type PendingMessageScroll =
   | { mode: "bottom"; behavior: ScrollBehavior }
   | { mode: "preserve"; scrollHeight: number; scrollTop: number };
 type MessageFocusRequest = { id: number; sequence: number };
-type MessagingEvent = {
-  type?: string;
-  mid?: number;
-  fromUserPublicID?: string;
-  conversationPublicID?: string;
-  message?: InternalMessagingMessage;
-  users?: Array<{ publicID: string; online: boolean }>;
-  detail?: {
-    type?: string;
-    content?: string;
-    content_type?: string;
-    mid?: number;
-    detail?: { type?: string; content?: string };
-  };
-};
-
 class MessageRenderBoundary extends React.Component<
   { children: React.ReactNode; fallback: React.ReactNode },
   { failed: boolean }
@@ -234,83 +218,6 @@ function useMobileMessagingLayout() {
   }, []);
 
   return mobile;
-}
-
-function useMessagingEvents(
-  enabled: boolean,
-  accessToken: string,
-  onEvent: (event: MessagingEvent) => void,
-  onConnectionChange: (connected: boolean) => void,
-) {
-  const latestMID = React.useRef(0);
-  const callback = React.useRef(onEvent);
-  const connectionCallback = React.useRef(onConnectionChange);
-  callback.current = onEvent;
-  connectionCallback.current = onConnectionChange;
-
-  React.useEffect(() => {
-    if (!enabled || !accessToken) return;
-    let cancelled = false;
-    let controller: AbortController | null = null;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const connect = async () => {
-      controller = new AbortController();
-      try {
-        const response = await openInternalMessagingEvents(
-          accessToken,
-          latestMID.current || undefined,
-          controller.signal,
-        );
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("event stream is unavailable");
-        connectionCallback.current(true);
-        const decoder = new TextDecoder();
-        let pending = "";
-        while (!cancelled) {
-          const next = await reader.read();
-          if (next.done) break;
-          pending += decoder.decode(next.value, { stream: true });
-          const events = pending.split("\n\n");
-          pending = events.pop() || "";
-          for (const event of events) {
-            const data = event
-              .split("\n")
-              .find((line) => line.startsWith("data:"))
-              ?.slice(5)
-              .trim();
-            if (!data) continue;
-            try {
-              const payload = JSON.parse(data) as MessagingEvent;
-              if (typeof payload.mid === "number") {
-                latestMID.current = Math.max(latestMID.current, payload.mid);
-              }
-              if (
-                payload.type === "chat" ||
-                payload.type === "users_state" ||
-                payload.type === "users_state_changed"
-              ) {
-                callback.current(payload);
-              }
-            } catch {
-              // Heartbeats and non-JSON events still indicate a live connection.
-            }
-          }
-        }
-      } catch {
-        // The next retry also covers temporary VoceChat unavailability.
-      }
-      connectionCallback.current(false);
-      if (!cancelled) retryTimer = setTimeout(connect, 1500);
-    };
-    void connect();
-    return () => {
-      cancelled = true;
-      controller?.abort();
-      connectionCallback.current(false);
-      if (retryTimer) clearTimeout(retryTimer);
-    };
-  }, [accessToken, enabled]);
 }
 
 export function InternalMessagingWindowHost({
@@ -726,7 +633,14 @@ export function InternalMessagingWindowHost({
     [],
   );
 
-  useMessagingEvents(enabled, accessToken, (event) => {
+  useInternalMessagingEvents(enabled, accessToken, (event) => {
+    if (
+      event.type !== "chat" &&
+      event.type !== "users_state" &&
+      event.type !== "users_state_changed"
+    ) {
+      return;
+    }
     if (event.type === "users_state" || event.type === "users_state_changed") {
       const states = event.users || [];
       setOnlineByUser((current) => {

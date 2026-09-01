@@ -12,6 +12,10 @@ const launcherSource = readFileSync(
   join(dirname(fileURLToPath(import.meta.url)), "../components/internal-messaging-launcher.tsx"),
   "utf8",
 );
+const eventHookSource = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "../components/use-internal-messaging-events.ts"),
+  "utf8",
+);
 
 test("host uses the shipped markdown, live-event, and containment helpers", () => {
   assert.equal(hostSource.includes("function safeInternalMessageMarkdown"), false);
@@ -40,6 +44,20 @@ test("host uses the shipped markdown, live-event, and containment helpers", () =
 test("lightweight launcher defers the complete messaging window", () => {
   assert.equal(launcherSource.includes('import("./internal-messaging-host")'), true);
   assert.equal(launcherSource.includes("React.lazy("), true);
-  assert.equal(launcherSource.includes("useLauncherEvents("), true);
+  assert.equal(launcherSource.includes("useInternalMessagingEvents("), true);
   assert.equal(launcherSource.includes("LazyInternalMessagingWindow"), true);
+  assert.equal(launcherSource.includes("MessagingWindowBoundary"), true);
+  assert.equal(launcherSource.includes("retryWindowLoad"), true);
+});
+
+test("launcher and complete window share one event-stream implementation", () => {
+  assert.equal(hostSource.includes("useInternalMessagingEvents("), true);
+  assert.equal(hostSource.includes("openInternalMessagingEvents("), false);
+  assert.equal(launcherSource.includes("openInternalMessagingEvents("), false);
+  assert.equal(eventHookSource.includes("openInternalMessagingEvents("), true);
+  assert.equal(eventHookSource.includes("startMessagingEventStream"), true);
+});
+
+test("emoji picker renders above the floating messaging window", () => {
+  assert.equal(hostSource.includes('className="z-[80]'), true);
 });

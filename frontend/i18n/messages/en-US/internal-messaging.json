@@ -23,6 +23,7 @@
     "closePreview": "Close image preview"
   },
   "errors": {
+    "windowLoad": "The messaging window could not be loaded.",
     "directory": "The messaging service is temporarily unavailable. Please try again later.",
     "history": "Messages could not be loaded.",
     "olderHistory": "Earlier messages could not be loaded. Please try again.",
@@ -34,6 +35,9 @@
     "fileSend": "The file could not be sent. Please try again.",
     "fileDownload": "The file could not be downloaded. Please try again.",
     "locate": "This message could not be located. Please try again later."
+  },
+  "actions": {
+    "retryLoad": "Retry loading messages"
   },
   "notifications": {
     "file": "You received a file",

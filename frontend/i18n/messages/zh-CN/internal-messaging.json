@@ -23,6 +23,7 @@
     "closePreview": "关闭图片预览"
   },
   "errors": {
+    "windowLoad": "聊天窗口加载失败。",
     "directory": "聊天服务暂不可用，请稍后重试。",
     "history": "消息暂时无法加载。",
     "olderHistory": "加载更早消息失败，请重试。",
@@ -34,6 +35,9 @@
     "fileSend": "文件发送失败，请重试。",
     "fileDownload": "文件下载失败，请重试。",
     "locate": "无法定位这条消息，请稍后重试。"
+  },
+  "actions": {
+    "retryLoad": "点击聊天按钮重试"
   },
   "notifications": {
     "file": "你收到一个文件",
