@@ -338,7 +338,8 @@
     "moderationBlocked": "内容已拦截",
     "moderationBlockedDescription": "安全检查后已撤回本轮回答。",
     "moderationEventId": "事件编号：{id}",
-    "moderationCategories": "命中分类：{categories}"
+    "moderationCategories": "命中分类：{categories}",
+    "moderationBlockedBilled": "拦截前上游已产生的用量照常计费。"
   },
   "data": {
     "signInRequired": "未登录，无法加载会话消息",

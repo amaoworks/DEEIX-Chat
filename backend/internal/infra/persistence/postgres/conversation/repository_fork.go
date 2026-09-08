@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/dberror"
 	models "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/models"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/toolresult"
@@ -103,7 +104,7 @@ func (r *Repo) CreateForkedConversation(ctx context.Context, input repository.Cr
 		return cloneForkedDisplayTraces(tx, target.UserID, input.SourceConversationID, createdConversation.ID, targetMessageIDs)
 	})
 	if err != nil {
-		return translateError(err)
+		return dberror.Translate(err)
 	}
 
 	*input.Conversation = toConversationDomain(createdConversation)
@@ -200,17 +201,17 @@ func enrichForkedToolTracePayload(
 	targetRunID string,
 	toolOutputs map[forkToolOutputKey]string,
 ) string {
-	var payload map[string]interface{}
+	var payload map[string]any
 	if json.Unmarshal([]byte(payloadJSON), &payload) != nil {
 		return payloadJSON
 	}
-	calls, ok := payload["tool_calls"].([]interface{})
+	calls, ok := payload["tool_calls"].([]any)
 	if !ok {
 		return payloadJSON
 	}
 	changed := false
 	for _, item := range calls {
-		call, ok := item.(map[string]interface{})
+		call, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -245,7 +246,7 @@ func enrichForkedToolTracePayload(
 	return string(encoded)
 }
 
-func forkToolCallID(call map[string]interface{}) string {
+func forkToolCallID(call map[string]any) string {
 	for _, key := range []string{"tool_call_id", "id", "call_id"} {
 		if value, ok := call[key].(string); ok && strings.TrimSpace(value) != "" {
 			return strings.TrimSpace(value)

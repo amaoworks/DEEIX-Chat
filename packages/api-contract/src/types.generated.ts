@@ -456,7 +456,6 @@ export interface BillingPlanDataResponse {
 export interface BillingPlanResponse {
   code: string;
   description: string;
-  discountPercent: number;
   featureJSON: string;
   id: number;
   isActive: boolean;
@@ -3566,11 +3565,6 @@ export interface UpdateBillingPlanRequest {
   currency?: string;
   /** @maxLength 255 */
   description: string;
-  /**
-   * @min 0
-   * @max 100
-   */
-  discountPercent: number;
   /**
    * @minLength 1
    * @maxLength 64

@@ -3,7 +3,6 @@ package internalmessaging
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,16 +15,17 @@ import (
 
 	domainmessaging "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/internalmessaging"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
-	vocechat "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/integration/vocechat"
+	vocechat "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/vocechat"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 )
 
 var (
-	ErrDisabled             = errors.New("internal messaging is disabled")
-	ErrRecipientUnavailable = errors.New("recipient is unavailable")
-	ErrMessageUnavailable   = errors.New("message is unavailable")
-	ErrFileTooLarge         = errors.New("file exceeds the configured size limit")
-	ErrQuotaExceeded        = errors.New("file quota exceeded")
+	ErrDisabled             = apperr.New("internal_messaging.disabled", "internal messaging is disabled")
+	ErrRecipientUnavailable = apperr.New("internal_messaging.recipient_unavailable", "recipient is unavailable")
+	ErrMessageUnavailable   = apperr.New("internal_messaging.message_unavailable", "message is unavailable")
+	ErrFileTooLarge         = apperr.New("internal_messaging.file_too_large", "file exceeds the configured size limit")
+	ErrQuotaExceeded        = apperr.New("internal_messaging.quota_exceeded", "file quota exceeded")
 )
 
 const (
@@ -868,24 +868,6 @@ func (s *Service) EventMessage(ctx context.Context, actorID uint, mid int64) (Ch
 	return indexedToChatMessage(*item, sender.PublicID), peer.PublicID, nil
 }
 
-// EventSenderPublicID translates a VoceChat event sender back to the active
-// DEEIX identity. The browser can then track unread messages without depending
-// on VoceChat's internal user IDs.
-func (s *Service) EventSenderPublicID(ctx context.Context, voceUID int64) (string, error) {
-	if s.bindings == nil || voceUID <= 0 {
-		return "", ErrRecipientUnavailable
-	}
-	binding, err := s.bindings.FindByVoceUID(ctx, voceUID)
-	if err != nil || binding == nil {
-		return "", ErrRecipientUnavailable
-	}
-	user, err := s.users.GetByPublicID(ctx, binding.UserPublicID)
-	if err != nil || user == nil || !available(*user) {
-		return "", ErrRecipientUnavailable
-	}
-	return user.PublicID, nil
-}
-
 func (s *Service) resolveChat(ctx context.Context, actorID uint, recipientPublicID string) (*domainuser.User, *domainuser.User, vocechat.Login, vocechat.Login, error) {
 	actor, target, err := s.resolveParticipants(ctx, actorID, recipientPublicID)
 	if err != nil {
@@ -1293,7 +1275,7 @@ func safeFilename(value string) string {
 
 func fileMetadataFromVoce(item vocechat.Message) indexedFileMetadata {
 	metadata := indexedFileMetadata{Path: item.Detail.Content}
-	decode := func(key string, output interface{}) {
+	decode := func(key string, output any) {
 		if raw, ok := item.Detail.Properties[key]; ok {
 			_ = json.Unmarshal(raw, output)
 		}

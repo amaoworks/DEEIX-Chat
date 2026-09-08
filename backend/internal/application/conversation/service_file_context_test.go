@@ -212,9 +212,16 @@ func TestInjectConversationImageContextRejectsMissingAndOversizedContext(t *test
 		t.Fatalf("expected missing historical image to fail explicitly, got %v", err)
 	}
 
+	domainMessages = []model.Message{{Role: "user", Attachments: `[{"file_id":"stored","kind":"image","mime_type":"image/png"}]`}}
+	attachments := []AttachmentInput{{FileID: "stored", Kind: "image", MimeType: "image/png", StoragePath: "images/stored.png", ContextMode: fileContextModeDirectImage}}
+	_, err = service.injectConversationImageContext(t.Context(), historyMessagesFromDomain(domainMessages, historyMessageOptions{}), domainMessages, attachments, config.Config{})
+	if !errors.Is(err, appstorage.ErrProviderNotConfigured) {
+		t.Fatalf("expected missing object store provider to fail explicitly, got %v", err)
+	}
+
 	largeData := make([]byte, 11*1024*1024)
 	cache := defaultPreparedConversationImageCache()
-	attachments := []AttachmentInput{
+	attachments = []AttachmentInput{
 		{FileID: "one", Kind: "image", MimeType: "image/png", StoragePath: "one", ContextMode: fileContextModeDirectImage},
 		{FileID: "two", Kind: "image", MimeType: "image/png", StoragePath: "two", ContextMode: fileContextModeDirectImage},
 	}
@@ -302,6 +309,16 @@ func TestInjectUserContextPreservesExistingImageParts(t *testing.T) {
 	}
 	if !strings.Contains(got[0].Parts[0].Text, "继续分析") || !strings.Contains(got[0].Parts[0].Text, "偏好简洁回答") {
 		t.Fatalf("expected dynamic context and original text, got %q", got[0].Parts[0].Text)
+	}
+}
+
+func TestInjectUserContextSilentlySkipsImagesWithoutObjectStoreProvider(t *testing.T) {
+	messages := []llm.Message{{Role: "user", Content: "describe this image"}}
+	got := injectUserContext(t.Context(), messages, userContextInput{Attachments: []AttachmentInput{{
+		FileID: "image-1", Kind: "image", MimeType: "image/png", StoragePath: "images/one.png", Current: true,
+	}}}, config.Config{}, nil)
+	if len(got) != 1 || len(got[0].Parts) != 0 || got[0].Content != messages[0].Content {
+		t.Fatalf("expected missing provider to leave the message unchanged, got %#v", got)
 	}
 }
 

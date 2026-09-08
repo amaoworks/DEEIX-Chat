@@ -25,7 +25,6 @@ type BillingPlanView struct {
 	Description         string
 	FeatureJSON         string
 	PeriodCreditNanousd int64
-	DiscountPercent     int
 	SortOrder           int
 	IsActive            bool
 	PermissionGroupID   *uint

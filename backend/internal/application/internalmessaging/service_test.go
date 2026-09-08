@@ -297,7 +297,7 @@ func TestLocalConversationUpdatesDoNotLoginToVoceChat(t *testing.T) {
 	}
 }
 
-func TestEventSenderPublicIDResolvesActiveDEEIXUser(t *testing.T) {
+func TestEventPresenceResolvesActiveDEEIXUser(t *testing.T) {
 	users := fakeUsers{items: map[uint]domainuser.User{
 		2: {ID: 2, PublicID: "sender", Username: "sender", Status: domainuser.StatusActive},
 	}}
@@ -306,16 +306,16 @@ func TestEventSenderPublicIDResolvesActiveDEEIXUser(t *testing.T) {
 	}}
 	service := NewService(true, users, bindings, &fakeVoce{})
 
-	publicID, err := service.EventSenderPublicID(context.Background(), 42)
+	presence, err := service.EventPresence(context.Background(), `{"type":"users_state_changed","uid":42,"online":true}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if publicID != "sender" {
-		t.Fatalf("public ID = %q, want sender", publicID)
+	if len(presence) != 1 || presence[0].PublicID != "sender" || !presence[0].Online {
+		t.Fatalf("unexpected presence: %+v", presence)
 	}
 }
 
-func TestEventSenderPublicIDRejectsInactiveDEEIXUser(t *testing.T) {
+func TestEventPresenceRejectsInactiveDEEIXUser(t *testing.T) {
 	users := fakeUsers{items: map[uint]domainuser.User{
 		2: {ID: 2, PublicID: "sender", Username: "sender", Status: domainuser.StatusSuspended},
 	}}
@@ -324,9 +324,9 @@ func TestEventSenderPublicIDRejectsInactiveDEEIXUser(t *testing.T) {
 	}}
 	service := NewService(true, users, bindings, &fakeVoce{})
 
-	_, err := service.EventSenderPublicID(context.Background(), 42)
-	if !errors.Is(err, ErrRecipientUnavailable) {
-		t.Fatalf("error = %v", err)
+	presence, err := service.EventPresence(context.Background(), `{"type":"users_state_changed","uid":42,"online":true}`)
+	if err != nil || len(presence) != 0 {
+		t.Fatalf("inactive user exposed: presence=%+v error=%v", presence, err)
 	}
 }
 

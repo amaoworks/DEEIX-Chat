@@ -19,7 +19,7 @@ func SanitizeOpaque(raw string) string {
 	}
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.UseNumber()
-	var payload interface{}
+	var payload any
 	if err := decoder.Decode(&payload); err != nil {
 		return value
 	}
@@ -37,14 +37,14 @@ func SanitizeOpaque(raw string) string {
 	return string(encoded)
 }
 
-func sanitizeOpaqueJSON(value interface{}) (interface{}, bool) {
+func sanitizeOpaqueJSON(value any) (any, bool) {
 	switch item := value.(type) {
 	case string:
 		if looksLikeOpaque(item) {
 			return opaqueSummary(len([]rune(item))), true
 		}
 		return item, false
-	case []interface{}:
+	case []any:
 		changed := false
 		for index, child := range item {
 			sanitized, childChanged := sanitizeOpaqueJSON(child)
@@ -54,7 +54,7 @@ func sanitizeOpaqueJSON(value interface{}) (interface{}, bool) {
 			changed = changed || childChanged
 		}
 		return item, changed
-	case map[string]interface{}:
+	case map[string]any:
 		changed := false
 		for key, child := range item {
 			sanitized, childChanged := sanitizeOpaqueJSON(child)

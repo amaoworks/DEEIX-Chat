@@ -10,6 +10,7 @@ import (
 
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/toolresult"
 )
 
@@ -349,7 +350,7 @@ func enforceToolResultAggregateBudget(slots []toolExecutionSlot, maxTokens int64
 
 // toolResultModelTokens 估算单个工具结果实际占用的模型 token。
 func toolResultModelTokens(result llm.ToolResult) int64 {
-	return estimateTokens(result.OutputJSON) + estimateTokens(result.Error)
+	return tokenestimate.Estimate(result.OutputJSON) + tokenestimate.Estimate(result.Error)
 }
 
 // applyToolResultTokenBudget 按同一配额约束工具正文和错误信息。
@@ -357,8 +358,8 @@ func applyToolResultTokenBudget(result *llm.ToolResult, maxTokens int64) {
 	if result == nil {
 		return
 	}
-	outputTokens := estimateTokens(result.OutputJSON)
-	errorTokens := estimateTokens(result.Error)
+	outputTokens := tokenestimate.Estimate(result.OutputJSON)
+	errorTokens := tokenestimate.Estimate(result.Error)
 	total := outputTokens + errorTokens
 	if total <= maxTokens {
 		return
@@ -392,7 +393,7 @@ func modelToolOutputForModel(raw string) string {
 // budgetToolOutputForModel 仅在文本超过本批 token 配额时保留头尾片段。
 func budgetToolOutputForModel(value string, maxTokens int64) string {
 	text := strings.TrimSpace(value)
-	if text == "" || estimateTokens(text) <= maxTokens {
+	if text == "" || tokenestimate.Estimate(text) <= maxTokens {
 		return text
 	}
 	return headTailToolOutputByTokens(text, maxTokens)
@@ -404,15 +405,15 @@ func headTailToolOutputByTokens(value string, maxTokens int64) string {
 	if text == "" || maxTokens <= 0 {
 		return ""
 	}
-	if estimateTokens(text) <= maxTokens {
+	if tokenestimate.Estimate(text) <= maxTokens {
 		return text
 	}
 	runes := []rune(text)
 	marker := fmt.Sprintf("\n\n[... %d characters omitted to fit the model context ...]\n\n", len(runes))
-	contentTokens := maxTokens - estimateTokens(marker) - 4
+	contentTokens := maxTokens - tokenestimate.Estimate(marker) - 4
 	if contentTokens <= 0 {
 		summary := "[Tool result omitted to fit the model context]"
-		if estimateTokens(summary) <= maxTokens {
+		if tokenestimate.Estimate(summary) <= maxTokens {
 			return summary
 		}
 		return toolOutputPrefixByTokenBudget(runes, maxTokens)
@@ -530,7 +531,7 @@ func canonicalToolArguments(raw string) string {
 	if value == "" {
 		return "{}"
 	}
-	var payload interface{}
+	var payload any
 	if err := json.Unmarshal([]byte(value), &payload); err != nil {
 		return value
 	}

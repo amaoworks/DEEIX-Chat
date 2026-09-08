@@ -290,7 +290,7 @@ type FileObject struct {
 	ProcessingPayloadJSON  string
 	ProcessingStartedAt    *time.Time
 	ProcessingCompletedAt  *time.Time
-	RagOptOut              bool
+	RAGOptOut              bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/settings"
 	appskill "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/skill"
 	appsystemevent "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/systemevent"
+	appupload "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/upload"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/usersettings"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
@@ -110,6 +111,8 @@ type App struct {
 	embeddingClient        *embedding.Client
 	mediaArtifactClient    *mediaartifact.Client
 	moderationClient       *moderationclient.Client
+	conversationService    *conversation.Service
+	tracingShutdown        platformtracing.ShutdownFunc
 	backgroundCancel       context.CancelFunc
 	// shutdown 是进程关停排空信号：翻转就绪探针并断开订阅型长连接。
 	shutdown *lifecycle.Shutdown
@@ -131,11 +134,11 @@ func (a *subscriptionGroupAdapter) GetUserSubscriptionGroupID(ctx context.Contex
 }
 
 type avatarContentOpener struct {
-	conversationService *conversation.Service
+	uploads *appupload.Service
 }
 
 func (o avatarContentOpener) OpenAvatarFileContent(ctx context.Context, userID uint, fileID string) (*user.AvatarFileContent, error) {
-	content, err := o.conversationService.OpenFileContent(ctx, userID, fileID)
+	content, err := o.uploads.OpenFileContent(ctx, userID, fileID)
 	if err != nil {
 		return nil, err
 	}
@@ -156,7 +159,7 @@ func NewApp() (*App, error) {
 	}
 	runtimeCfg := config.NewRuntime(cfg)
 
-	if err := platformtracing.Init(context.Background(), platformtracing.Config{
+	tracingShutdown, err := platformtracing.Init(context.Background(), platformtracing.Config{
 		ServiceName:  cfg.AppName,
 		Enabled:      cfg.OTelEnabled,
 		Endpoint:     cfg.OTelExporterOTLPEndpoint,
@@ -164,9 +167,19 @@ func NewApp() (*App, error) {
 		Insecure:     cfg.OTelExporterOTLPInsecure,
 		Protocol:     cfg.OTelExporterOTLPProtocol,
 		SamplingRate: cfg.OTelSamplingRate,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("init tracing: %w", err)
 	}
+	keepTracing := false
+	defer func() {
+		if keepTracing {
+			return
+		}
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tracingShutdown(shutdownCtx)
+	}()
 
 	log, err := platformlogger.New(cfg.Env)
 	if err != nil {
@@ -250,11 +263,10 @@ func NewApp() (*App, error) {
 	paymentCheckoutService := billing.NewPaymentCheckoutService(stripepayment.New(cfg.StrictOutboundPolicy()), epaypayment.New())
 	billingHandler := billinghttp.NewHandler(billingService, settingsService, runtimeCfg, officialPricingService, paymentCheckoutService, log)
 	billingModule := billinghttp.NewModule(billingHandler)
-	// 组合根绑定对象存储默认工厂；application 侧未显式注入工厂的 provider 均使用该实现。
-	appstorage.RegisterDefaultFactory(objectstore.New)
+	// 对象存储工厂由组合根显式注入，避免服务实例依赖进程级可变状态。
 	objectStoreProvider := appstorage.NewRuntimeProvider(runtimeCfg, objectstore.New)
-	// 组合根注册抽取引擎工厂；具体客户端构造为 nil 时必须返回 nil 接口，避免 typed-nil 绕过判空。
-	extraction.RegisterEngineFactories(extraction.EngineFactories{
+	// 抽取引擎工厂由组合根显式注入；具体客户端构造为 nil 时必须返回 nil 接口，避免 typed-nil 绕过判空。
+	extractionFactories := extraction.EngineFactories{
 		NewTika: func(cfg config.Config) extraction.DocumentExtractor {
 			if client := extractengines.NewTika(cfg); client != nil {
 				return client
@@ -280,7 +292,7 @@ func NewApp() (*App, error) {
 			return nil
 		},
 		Builtin: extractengines.Builtin{},
-	})
+	}
 	geoResolver := geoip.New(runtimeCfg.Snapshot())
 	// GeoIP 关闭时 geoip.New 返回 nil 指针，必须转成 nil 接口再注入，避免 typed-nil 绕过判空。
 	var authGeoResolver auth.GeoResolver
@@ -340,31 +352,47 @@ func NewApp() (*App, error) {
 	mcpRepo := mcprepo.NewRepo(db)
 	embedClient := embedding.New(trustedOutboundPolicy)
 	compactService := compact.NewServiceWithRuntime(runtimeCfg, conversationRepo, log)
-	extractionService := extraction.NewServiceWithRuntime(runtimeCfg)
+	extractionService := extraction.NewServiceWithRuntime(runtimeCfg, extractionFactories)
 	extractionService.SetObjectStoreProvider(objectStoreProvider)
 	embeddingService := appembedding.NewServiceWithRuntime(runtimeCfg, conversationRepo, extractionService, embedClient, log)
 	memoryService.SetEmbeddingProvider(embeddingService)
 	settingsHandler.SetEmbeddingService(embeddingService)
-	processingService := appprocessing.NewServiceWithRuntime(runtimeCfg, conversationRepo, conversationCache, extractionService, embeddingService, log, appprocessing.DefaultExtractorVersion)
-	ragService := apprag.NewServiceWithRuntime(runtimeCfg, conversationRepo, conversationCache, embedClient)
-	conversationService := conversation.NewServiceWithRuntime(
+	processingService := appprocessing.NewServiceWithRuntime(appprocessing.Dependencies{
+		Config:           runtimeCfg,
+		Repository:       conversationRepo,
+		Cache:            conversationCache,
+		ExtractService:   extractionService,
+		EmbeddingService: embeddingService,
+		Logger:           log,
+		ExtractorVersion: appprocessing.DefaultExtractorVersion,
+	})
+	uploadService := appupload.NewServiceWithRuntime(
 		runtimeCfg,
 		conversationRepo,
-		conversationCache,
-		channelService,
-		memoryService,
-		llmClient,
-		mediaArtifactClient,
-		mcpClient,
-		embedClient,
-		nil,
-		compactService,
-		embeddingService,
-		processingService,
-		extractionService,
-		ragService,
 		log,
+		appupload.Hooks{InitializeUploadedFile: processingService.InitializeUploadedFile},
+		conversation.UploadErrorSet(),
+		appprocessing.DefaultExtractorVersion,
 	)
+	uploadService.SetObjectStoreProvider(objectStoreProvider)
+	ragService := apprag.NewServiceWithRuntime(runtimeCfg, conversationRepo, conversationCache, embedClient)
+	conversationService := conversation.NewServiceWithRuntime(conversation.Dependencies{
+		Config:            runtimeCfg,
+		Repository:        conversationRepo,
+		Cache:             conversationCache,
+		RouteResolver:     channelService,
+		MemoryRecorder:    memoryService,
+		LLMClient:         llmClient,
+		MediaDownloader:   mediaArtifactClient,
+		MCPClient:         mcpClient,
+		CompactService:    compactService,
+		EmbeddingService:  embeddingService,
+		ProcessingService: processingService,
+		UploadService:     uploadService,
+		ExtractService:    extractionService,
+		RAGService:        ragService,
+		Logger:            log,
+	})
 	conversationService.SetBillingService(billingService)
 	conversationService.SetAuditWriter(auditService)
 	conversationService.SetObjectStoreProvider(objectStoreProvider)
@@ -377,13 +405,13 @@ func NewApp() (*App, error) {
 	conversationService.SetModerationService(contentModerationService)
 	contentModerationHandler := contentmoderationhttp.NewHandler(contentModerationService)
 	contentModerationModule := contentmoderationhttp.NewModule(contentModerationHandler)
-	userService.SetAvatarContentOpener(avatarContentOpener{conversationService: conversationService})
-	userService.SetAvatarFileValidator(conversationService)
+	userService.SetAvatarContentOpener(avatarContentOpener{uploads: uploadService})
+	userService.SetAvatarFileValidator(uploadService)
 	userService.SetActivityStatsRepository(billingRepo)
-	authService.SetAvatarFileValidator(conversationService)
+	authService.SetAvatarFileValidator(uploadService)
 	memoryService.SetCacheInvalidator(conversationService.InvalidateMemoryCache)
 	shutdownSignal := lifecycle.NewShutdown()
-	conversationHandler := conversationhttp.NewHandler(conversationService, runtimeCfg, shutdownSignal)
+	conversationHandler := conversationhttp.NewHandler(conversationService, uploadService, processingService, runtimeCfg, shutdownSignal)
 	conversationModule := conversationhttp.NewModule(conversationHandler)
 	userHandler := userhttp.NewHandler(userService)
 	userModule := userhttp.NewModule(userHandler)
@@ -432,9 +460,9 @@ func NewApp() (*App, error) {
 	knowledgeBaseRepo := knowledgebaserepo.NewRepo(db)
 	knowledgeBaseService := appknowledgebase.NewService(knowledgeBaseRepo)
 	knowledgeBaseService.SetAuditWriter(auditService)
-	knowledgeBaseService.SetFileCleaner(conversationService)
-	knowledgeBaseService.SetFileContentOpener(conversationService)
-	knowledgeBaseService.SetFileUploader(conversationService)
+	knowledgeBaseService.SetFileCleaner(uploadService)
+	knowledgeBaseService.SetFileContentOpener(uploadService)
+	knowledgeBaseService.SetFileUploader(uploadService)
 	knowledgeBaseService.SetFileEmbeddingSubmitter(processingService)
 	knowledgeBaseService.SetLogger(log)
 	conversationService.SetKnowledgeBaseResolver(knowledgeBaseService)
@@ -486,7 +514,7 @@ func NewApp() (*App, error) {
 	channelService.StartModelIconAssetCleanup(backgroundCtx)
 	internalMessagingService.StartBackgroundWorkers(backgroundCtx)
 
-	return &App{
+	app := &App{
 		cfg:                    runtimeCfg.Snapshot(),
 		engine:                 engine,
 		logger:                 log,
@@ -499,9 +527,13 @@ func NewApp() (*App, error) {
 		embeddingClient:        embedClient,
 		mediaArtifactClient:    mediaArtifactClient,
 		moderationClient:       moderationClient,
+		conversationService:    conversationService,
+		tracingShutdown:        tracingShutdown,
 		backgroundCancel:       backgroundCancel,
 		shutdown:               shutdownSignal,
-	}, nil
+	}
+	keepTracing = true
+	return app, nil
 }
 
 // Run 启动 HTTP 服务并支持优雅停机。
@@ -582,6 +614,9 @@ func (a *App) Close() {
 	if a.backgroundCancel != nil {
 		a.backgroundCancel()
 	}
+	if a.conversationService != nil {
+		a.conversationService.Close()
+	}
 	if a.redis != nil {
 		_ = a.redis.Close()
 	}
@@ -613,6 +648,8 @@ func (a *App) Close() {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	platformtracing.Shutdown(shutdownCtx)
+	if a.tracingShutdown != nil {
+		_ = a.tracingShutdown(shutdownCtx)
+	}
 	a.logger.Sync() //nolint:errcheck
 }

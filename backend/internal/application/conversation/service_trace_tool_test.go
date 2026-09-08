@@ -11,8 +11,59 @@ import (
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/toolresult"
 )
+
+func normalizeTraceToolCalls(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		items := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if call, ok := item.(map[string]any); ok {
+				items = append(items, call)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func getTraceString(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func traceInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func normalizeTraceToolCallsFromPayload(payload *tracePayload) []map[string]any {
+	if payload == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload.ToolCalls)
+	if err != nil {
+		return nil
+	}
+	var calls []map[string]any
+	if err := json.Unmarshal(raw, &calls); err != nil {
+		return nil
+	}
+	return calls
+}
 
 func TestSummarizeToolTracePayloadCountsFailedCalls(t *testing.T) {
 	firstSummary, _, firstPayload := buildToolTrace([]model.ToolCall{{
@@ -47,7 +98,7 @@ func TestBuildToolTraceMarksReusedCallsAsCompleted(t *testing.T) {
 	if !strings.Contains(markdown, "已复用") {
 		t.Fatalf("expected reused status in markdown, got %q", markdown)
 	}
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 || items[0]["status"] != "reused" {
 		t.Fatalf("expected reused payload status, got %#v", items)
 	}
@@ -64,7 +115,7 @@ func TestBuildToolTraceStoresBoundedPreviewInsteadOfFullOutput(t *testing.T) {
 		OutputJSON: largeOutput,
 	}})
 
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 {
 		t.Fatalf("expected one tool call, got %#v", items)
 	}
@@ -100,14 +151,14 @@ func TestBuildToolTraceStoresBoundedPreviewInsteadOfFullOutput(t *testing.T) {
 }
 
 func TestBuildToolTracePrioritizesSemanticContentBeforeTraversalLimit(t *testing.T) {
-	output := make(map[string]interface{}, 601)
+	output := make(map[string]any, 601)
 	for index := 0; index < 600; index++ {
-		output[fmt.Sprintf("metadata_%03d", index)] = map[string]interface{}{
+		output[fmt.Sprintf("metadata_%03d", index)] = map[string]any{
 			"value": fmt.Sprintf("noise-%03d", index),
 		}
 	}
-	output["content"] = []interface{}{
-		map[string]interface{}{
+	output["content"] = []any{
+		map[string]any{
 			"type": "text",
 			"text": "## 完整结果\n\n- 第一项\n- 第二项",
 		},
@@ -123,7 +174,7 @@ func TestBuildToolTracePrioritizesSemanticContentBeforeTraversalLimit(t *testing
 		Status:     "success",
 		OutputJSON: string(encoded),
 	}})
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 {
 		t.Fatalf("expected one tool call, got %#v", items)
 	}
@@ -149,7 +200,7 @@ func TestBuildToolTraceBoundsFailedResult(t *testing.T) {
 		ErrorJSON:  largeError,
 	}})
 
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 {
 		t.Fatalf("expected one tool call, got %#v", items)
 	}
@@ -170,7 +221,7 @@ func TestBuildToolTraceStoresBoundedSearchPresentation(t *testing.T) {
 		OutputJSON: output,
 	}})
 
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 {
 		t.Fatalf("expected one tool call, got %#v", items)
 	}
@@ -234,7 +285,7 @@ func TestBuildToolTracePresentationExtractsReadableMCPText(t *testing.T) {
 		Status:     "success",
 		OutputJSON: output,
 	}})
-	items := normalizeTraceToolCalls(payload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(payload)
 	if len(items) != 1 {
 		t.Fatalf("expected one tool call, got %#v", items)
 	}
@@ -311,7 +362,7 @@ func TestBuildToolTracePresentationExtractsBoundedPlainText(t *testing.T) {
 	if presentation == nil {
 		t.Fatal("expected readable plain-text presentation")
 	}
-	textTokens := estimateTokens(presentation.Text)
+	textTokens := tokenestimate.Estimate(presentation.Text)
 	if textTokens <= int64(toolTraceLegacyOutputPreviewMaxChars/4) {
 		t.Fatalf("expected presentation to retain more than the compact preview, got %d tokens", textTokens)
 	}
@@ -347,7 +398,7 @@ func TestToolTracePayloadMergesStreamingPlaceholderWithFinalCall(t *testing.T) {
 	}})
 
 	mergeToolTracePayload(streamingPayload, completedPayload)
-	items := normalizeTraceToolCalls(streamingPayload["tool_calls"])
+	items := normalizeTraceToolCallsFromPayload(streamingPayload)
 	if len(items) != 1 {
 		t.Fatalf("expected one merged tool call, got %#v", items)
 	}
@@ -529,7 +580,11 @@ func TestToolTraceStartsNewRoundAfterPreviousToolRoundCloses(t *testing.T) {
 
 func TestTracePayloadJSONBoundsOversizedPayload(t *testing.T) {
 	secret := strings.Repeat("x", maxTracePayloadBytes+1)
-	serialized := tracePayloadJSON(map[string]interface{}{"upstream_debug": secret})
+	debug, err := json.Marshal(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serialized := tracePayloadJSON(&tracePayload{UpstreamDebug: debug})
 	if len(serialized) >= maxTracePayloadBytes {
 		t.Fatalf("expected bounded trace payload, got %d bytes", len(serialized))
 	}
@@ -572,15 +627,13 @@ func TestUpstreamReasoningPayloadStoresMetadataOnly(t *testing.T) {
 	draft := &messageTraceDraft{
 		summary:         "思考摘要",
 		contentMarkdown: strings.Repeat("完整思考内容", 256),
-		payload:         map[string]interface{}{},
+		payload:         &tracePayload{},
 	}
-	mergeUpstreamReasoningPayload(draft, messageTraceThinkKindContent, map[string]interface{}{
-		"event_type":        "response.reasoning_text.done",
-		"item_id":           "reasoning_1",
-		"status":            "completed",
-		"signature":         "opaque-signature",
-		"encrypted_content": strings.Repeat("encrypted", 256),
-	})
+	mergeUpstreamReasoningPayload(draft, messageTraceThinkKindContent, &tracePayload{Reasoning: &traceReasoning{
+		EventType: "response.reasoning_text.done",
+		ItemID:    "reasoning_1",
+		Status:    "completed",
+	}})
 
 	encoded := tracePayloadJSON(draft.payload)
 	for _, value := range []string{"完整思考内容", "思考摘要", "opaque-signature", "encrypted"} {
@@ -604,11 +657,7 @@ func TestFinalReasoningSnapshotReconcilesCompletedStreamEvent(t *testing.T) {
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_reconcile"},
 	}
-	payload := map[string]interface{}{
-		"event_type": "response.reasoning_text.done",
-		"item_id":    "reasoning_1",
-		"status":     "completed",
-	}
+	payload := &tracePayload{Reasoning: &traceReasoning{EventType: "response.reasoning_text.done", ItemID: "reasoning_1", Status: "completed"}}
 	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "streamed", payload)
 	recorder.completeUpstreamThink()
 	firstEventID := recorder.upstreamThink.eventID
@@ -634,9 +683,9 @@ func TestFinalReasoningSnapshotStartsNewRoundForDifferentItem(t *testing.T) {
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_reconcile_items"},
 	}
-	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "first", map[string]interface{}{"item_id": "reasoning_1"})
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "first", &tracePayload{Reasoning: &traceReasoning{ItemID: "reasoning_1"}})
 	recorder.completeUpstreamThink()
-	recorder.reconcileStructuredThink("second", "", map[string]interface{}{"item_id": "reasoning_2"})
+	recorder.reconcileStructuredThink("second", "", &tracePayload{Reasoning: &traceReasoning{ItemID: "reasoning_2"}})
 	recorder.completeUpstreamThink()
 
 	thinkEvents := traceEventsByType(recorder.events, "think")
@@ -657,7 +706,7 @@ func TestStreamingReasoningItemChangeClosesPriorToolRound(t *testing.T) {
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_stream_items"},
 	}
-	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "first reasoning", map[string]interface{}{"item_id": "reasoning_1"})
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "first reasoning", &tracePayload{Reasoning: &traceReasoning{ItemID: "reasoning_1"}})
 	toolSummary, toolMarkdown, toolPayload := buildToolTrace([]model.ToolCall{{
 		ToolCallID: "search_1",
 		ToolType:   "web_search_call",
@@ -665,7 +714,7 @@ func TestStreamingReasoningItemChangeClosesPriorToolRound(t *testing.T) {
 		Status:     "success",
 	}})
 	recorder.syncToolSection(toolSummary, toolMarkdown, toolPayload, messageTraceStatusCompleted)
-	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "second reasoning", map[string]interface{}{"item_id": "reasoning_2"})
+	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "second reasoning", &tracePayload{Reasoning: &traceReasoning{ItemID: "reasoning_2"}})
 	recorder.complete()
 
 	if len(recorder.events) != 3 {
@@ -696,7 +745,7 @@ func TestStreamingFinalizationDoesNotReplayObservedTraceEvents(t *testing.T) {
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_stream_finalize"},
 	}
-	reasoningPayload := map[string]interface{}{"item_id": "reasoning_1", "status": "completed"}
+	reasoningPayload := &tracePayload{Reasoning: &traceReasoning{ItemID: "reasoning_1", Status: "completed"}}
 	recorder.appendUpstreamReasoning(messageTraceThinkKindContent, "streamed reasoning", reasoningPayload)
 	recorder.completeUpstreamThink()
 	toolSummary, toolMarkdown, toolPayload := buildToolTrace([]model.ToolCall{{
@@ -830,9 +879,9 @@ func traceEventsByType(events []model.MessageTraceEvent, eventType string) []mod
 	return filtered
 }
 
-func traceEventPayload(t *testing.T, event model.MessageTraceEvent) map[string]interface{} {
+func traceEventPayload(t *testing.T, event model.MessageTraceEvent) map[string]any {
 	t.Helper()
-	payload := make(map[string]interface{})
+	payload := make(map[string]any)
 	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
 		t.Fatalf("decode trace event payload: %v", err)
 	}
@@ -841,7 +890,7 @@ func traceEventPayload(t *testing.T, event model.MessageTraceEvent) map[string]i
 
 func TestUpstreamThinkingDeltaIsCoalescedBetweenFlushes(t *testing.T) {
 	eventCount := 0
-	var events []map[string]interface{}
+	var events []map[string]any
 	recorder := &messageTraceRecorder{
 		cfg: config.Config{
 			ProcessTraceEnabled:            true,
@@ -849,7 +898,7 @@ func TestUpstreamThinkingDeltaIsCoalescedBetweenFlushes(t *testing.T) {
 			ProcessTraceStoreUpstreamThink: true,
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_1"},
-		onEvent: func(eventType string, payload map[string]interface{}) error {
+		onEvent: func(eventType string, payload map[string]any) error {
 			if eventType == "upstream_think_delta" {
 				eventCount++
 				events = append(events, payload)
@@ -904,7 +953,7 @@ func TestUpstreamThinkingDeltaIsCoalescedBetweenFlushes(t *testing.T) {
 }
 
 func TestFailedUpstreamThinkingFlushesBufferedContent(t *testing.T) {
-	var events []map[string]interface{}
+	var events []map[string]any
 	recorder := &messageTraceRecorder{
 		cfg: config.Config{
 			ProcessTraceEnabled:            true,
@@ -912,7 +961,7 @@ func TestFailedUpstreamThinkingFlushesBufferedContent(t *testing.T) {
 			ProcessTraceStoreUpstreamThink: true,
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_cancel"},
-		onEvent: func(eventType string, payload map[string]interface{}) error {
+		onEvent: func(eventType string, payload map[string]any) error {
 			if eventType == "upstream_think_delta" {
 				events = append(events, payload)
 			}
@@ -940,7 +989,7 @@ func TestFailedUpstreamThinkingFlushesBufferedContent(t *testing.T) {
 }
 
 func TestUpstreamThinkingLiveDeltaSkipsOversizedContent(t *testing.T) {
-	var events []map[string]interface{}
+	var events []map[string]any
 	recorder := &messageTraceRecorder{
 		cfg: config.Config{
 			ProcessTraceEnabled:            true,
@@ -948,7 +997,7 @@ func TestUpstreamThinkingLiveDeltaSkipsOversizedContent(t *testing.T) {
 			ProcessTraceStoreUpstreamThink: true,
 		},
 		assistant: &model.Message{ID: 1, ConversationID: 2, UserID: 3, RunID: "run_1"},
-		onEvent: func(eventType string, payload map[string]interface{}) error {
+		onEvent: func(eventType string, payload map[string]any) error {
 			if eventType == "upstream_think_delta" {
 				events = append(events, payload)
 			}
@@ -974,8 +1023,8 @@ func TestUpstreamThinkingLiveDeltaSkipsOversizedContent(t *testing.T) {
 }
 
 func TestBuildMessageProcessTraceDTOExtractsPromptTrace(t *testing.T) {
-	payload := map[string]interface{}{
-		"prompt_trace": messagePromptTracePayload(&model.MessagePromptTrace{
+	payload := map[string]any{
+		"prompt_trace": tracePayloadFromPromptTrace(&model.MessagePromptTrace{
 			Mode:                  "stateful",
 			PromptFingerprint:     "fp_1",
 			StatefulUsed:          true,
@@ -1149,11 +1198,11 @@ func TestBuildCompactionProcessTraceUsesReadableLines(t *testing.T) {
 	if markdown != want {
 		t.Fatalf("unexpected compaction markdown:\n%s", markdown)
 	}
-	stage, ok := payload[processTracePayloadStage].(map[string]interface{})
-	if !ok {
+	if payload.TraceStage == nil {
 		t.Fatalf("expected compaction trace stage payload, got %#v", payload)
 	}
-	if stage["kind"] != processTraceKindCompaction || stage["status"] != processTraceStatusCompleted {
+	stage := *payload.TraceStage
+	if stage.Kind != processTraceKindCompaction || stage.Status != processTraceStatusCompleted {
 		t.Fatalf("unexpected compaction trace stage: %#v", stage)
 	}
 }
@@ -1165,7 +1214,7 @@ func TestTraceRecorderContinuesProcessTraceAfterRequestCompletion(t *testing.T) 
 			ProcessTraceVisibleToUser: true,
 		},
 		assistant: &model.Message{},
-		onEvent:   func(string, map[string]interface{}) error { return nil },
+		onEvent:   func(string, map[string]any) error { return nil },
 	}
 	recorder.appendProcessSection("准备完成", "**准备**：请求已完成。", nil, messageTraceStatusStreaming)
 
@@ -1180,10 +1229,7 @@ func TestTraceRecorderContinuesProcessTraceAfterRequestCompletion(t *testing.T) 
 	recorder.appendProcessSection(
 		"上下文已压缩",
 		"**上下文压缩**：后台压缩完成。",
-		map[string]interface{}{processTracePayloadStage: map[string]interface{}{
-			"kind":   processTraceKindCompaction,
-			"status": processTraceStatusCompleted,
-		}},
+		&tracePayload{Stages: []traceStage{{Kind: processTraceKindCompaction, Status: processTraceStatusCompleted}}},
 		messageTraceStatusStreaming,
 	)
 	if recorder.process.status != messageTraceStatusStreaming || recorder.process.endedAt != nil {
@@ -1206,7 +1252,7 @@ func TestTraceRecorderKeepsAndReplacesPendingCompactionStage(t *testing.T) {
 			ProcessTraceVisibleToUser: true,
 		},
 		assistant: &model.Message{},
-		onEvent:   func(string, map[string]interface{}) error { return nil },
+		onEvent:   func(string, map[string]any) error { return nil },
 	}
 	recorder.appendProcessSection("准备完成", "**准备**：请求已完成。", nil, messageTraceStatusStreaming)
 	pendingSummary, pendingPayload := buildPendingCompactionProcessTrace()
@@ -1219,8 +1265,8 @@ func TestTraceRecorderKeepsAndReplacesPendingCompactionStage(t *testing.T) {
 	if recorder.onEvent != nil {
 		t.Fatal("background continuation must not emit into the closed request stream")
 	}
-	stages := normalizeProcessTraceStagePayloads(recorder.process.payload[processTracePayloadStages])
-	if len(stages) != 1 || stages[0]["kind"] != processTraceKindCompaction || stages[0]["status"] != processTraceStatusPending {
+	stages := recorder.process.payload.Stages
+	if len(stages) != 1 || stages[0].Kind != processTraceKindCompaction || stages[0].Status != processTraceStatusPending {
 		t.Fatalf("expected one pending compaction stage, got %#v", stages)
 	}
 
@@ -1233,8 +1279,8 @@ func TestTraceRecorderKeepsAndReplacesPendingCompactionStage(t *testing.T) {
 	recorder.setCompactionProcessStage(completedSummary, completedMarkdown, completedPayload)
 	recorder.complete()
 
-	stages = normalizeProcessTraceStagePayloads(recorder.process.payload[processTracePayloadStages])
-	if len(stages) != 1 || stages[0]["status"] != processTraceStatusCompleted {
+	stages = recorder.process.payload.Stages
+	if len(stages) != 1 || stages[0].Status != processTraceStatusCompleted {
 		t.Fatalf("expected pending stage to be replaced in place, got %#v", stages)
 	}
 	if recorder.process.status != messageTraceStatusCompleted || recorder.process.endedAt == nil {
@@ -1247,31 +1293,20 @@ func TestTraceRecorderKeepsAndReplacesPendingCompactionStage(t *testing.T) {
 
 func TestBuildFailedCompactionProcessTraceUsesStructuredStatus(t *testing.T) {
 	_, payload := buildFailedCompactionProcessTrace()
-	stage, ok := payload[processTracePayloadStage].(map[string]interface{})
-	if !ok || stage["kind"] != processTraceKindCompaction || stage["status"] != processTraceStatusFailed {
+	if payload.TraceStage == nil || payload.TraceStage.Kind != processTraceKindCompaction || payload.TraceStage.Status != processTraceStatusFailed {
 		t.Fatalf("unexpected failed compaction stage: %#v", payload)
 	}
 }
 
 func TestMergeTracePayloadAppendsProcessTraceStages(t *testing.T) {
-	payload := map[string]interface{}{}
-	mergeTracePayload(payload, map[string]interface{}{
-		processTracePayloadStage: map[string]interface{}{
-			"kind":   processTraceKindFileContext,
-			"status": processTraceStatusReady,
-		},
-	})
-	mergeTracePayload(payload, map[string]interface{}{
-		processTracePayloadStage: map[string]interface{}{
-			"kind":   processTraceKindRetrieval,
-			"status": processTraceStatusCompleted,
-		},
-	})
-	stages := normalizeProcessTraceStagePayloads(payload[processTracePayloadStages])
+	payload := &tracePayload{}
+	mergeTracePayload(payload, &tracePayload{Stages: []traceStage{{Kind: processTraceKindFileContext, Status: processTraceStatusReady}}})
+	mergeTracePayload(payload, &tracePayload{Stages: []traceStage{{Kind: processTraceKindRetrieval, Status: processTraceStatusCompleted}}})
+	stages := payload.Stages
 	if len(stages) != 2 {
 		t.Fatalf("expected two accumulated trace stages, got %#v", payload)
 	}
-	if stages[0]["kind"] != processTraceKindFileContext || stages[1]["kind"] != processTraceKindRetrieval {
+	if stages[0].Kind != processTraceKindFileContext || stages[1].Kind != processTraceKindRetrieval {
 		t.Fatalf("trace stages were not preserved in append order: %#v", stages)
 	}
 }
@@ -1283,11 +1318,7 @@ func TestSummarizeToolTraceDraftMatchesRenderedRows(t *testing.T) {
 			"**fetch**：执行失败；10581ms；context deadline exceeded",
 			"**fetch**：执行失败；10464ms；context deadline exceeded",
 		}, "\n"),
-		payload: map[string]interface{}{
-			"tool_calls": []map[string]interface{}{
-				{"name": "fetch", "status": "error"},
-			},
-		},
+		payload: &tracePayload{ToolCalls: []traceToolCall{{Name: "fetch", Status: "error"}}},
 	}
 
 	if got := summarizeToolTraceDraft(draft); got != "完成 3 次工具调用，3 次失败" {
@@ -1383,7 +1414,7 @@ func TestBudgetToolOutputForModelTruncatesByTokenBudget(t *testing.T) {
 	if !strings.Contains(got, "HEAD") || !strings.Contains(got, "TAIL") {
 		t.Fatalf("expected token budget to preserve head and tail, got %q", got)
 	}
-	if tokens := estimateTokens(got); tokens > 800 {
+	if tokens := tokenestimate.Estimate(got); tokens > 800 {
 		t.Fatalf("expected result within token budget, got %d tokens", tokens)
 	}
 }
@@ -1394,7 +1425,7 @@ func TestBudgetToolOutputForModelTruncatesCJKWithinTokenBudget(t *testing.T) {
 	if !strings.Contains(got, "开头") || !strings.Contains(got, "结尾") {
 		t.Fatalf("expected CJK result to preserve head and tail")
 	}
-	if tokens := estimateTokens(got); tokens > 500 {
+	if tokens := tokenestimate.Estimate(got); tokens > 500 {
 		t.Fatalf("expected CJK result within token budget, got %d tokens", tokens)
 	}
 }

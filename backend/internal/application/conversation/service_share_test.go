@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -100,6 +101,31 @@ func TestNormalizeMessagePublicIDsDeduplicatesAndKeepsOrder(t *testing.T) {
 	want := []string{"msg_a", "msg_b"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalized ids mismatch: got %v, want %v", got, want)
+	}
+}
+
+type conversationShareSchemaRepositoryStub struct {
+	repository.ConversationRepository
+}
+
+func (s *conversationShareSchemaRepositoryStub) GetConversationByPublicID(_ context.Context, _ string, _ uint) (*model.Conversation, error) {
+	return &model.Conversation{ID: 1, Title: "shared", Model: "model"}, nil
+}
+
+func (s *conversationShareSchemaRepositoryStub) ListMessagesForShare(_ context.Context, _ uint, _ []string) ([]model.Message, error) {
+	return []model.Message{{PublicID: "message_1"}}, nil
+}
+
+func (s *conversationShareSchemaRepositoryStub) ReplaceActiveConversationShare(_ context.Context, _ *model.ConversationShare) error {
+	return repository.ErrConversationShareSchemaOutdated
+}
+
+func TestCreateConversationShareMapsRepositorySchemaError(t *testing.T) {
+	service := &Service{repo: &conversationShareSchemaRepositoryStub{}}
+
+	_, err := service.CreateConversationShare(context.Background(), 1, "conversation_1", nil)
+	if !errors.Is(err, ErrConversationShareSchemaOutdated) {
+		t.Fatalf("CreateConversationShare() error = %v, want ErrConversationShareSchemaOutdated", err)
 	}
 }
 

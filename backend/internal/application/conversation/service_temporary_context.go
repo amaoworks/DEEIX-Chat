@@ -42,7 +42,7 @@ func (s *Service) prepareTemporaryKnowledgeContext(
 		domainMessages = append(domainMessages, model.Message{Role: item.Role, Content: item.Content})
 	}
 	query := buildRAGQuery(domainMessages, input.Messages[len(input.Messages)-1].Content, cfg.RAGQueryHistoryTurns)
-	emitEvent(input.OnEvent, "rag_search", map[string]interface{}{
+	emitEvent(input.OnEvent, "rag_search", map[string]any{
 		"message": "正在检索相关内容…",
 	})
 
@@ -70,10 +70,7 @@ func (s *Service) prepareTemporaryKnowledgeContext(
 			traceRecorder.appendProcessSection(
 				"知识库未检索到相关内容",
 				formatTraceStep("内容检索", "已检索所选知识库，但没有足够相关的片段。"),
-				map[string]interface{}{
-					"query":  strings.TrimSpace(query),
-					"status": strings.TrimSpace(string(result.Status)),
-				},
+				&tracePayload{Query: strings.TrimSpace(query), Status: strings.TrimSpace(string(result.Status))},
 				messageTraceStatusCompleted,
 			)
 		}

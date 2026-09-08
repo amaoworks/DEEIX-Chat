@@ -27,12 +27,12 @@ import (
 func (h *Handler) GetConversationToolCallDetail(c *gin.Context) {
 	runID, err := stringParam(c, "run_id")
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, "invalid run id")
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidRunID)
 		return
 	}
 	toolCallID, err := stringParam(c, "tool_call_id")
 	if err != nil {
-		response.Error(c, http.StatusBadRequest, "invalid tool call id")
+		response.ErrorFrom(c, http.StatusBadRequest, errInvalidToolCallID)
 		return
 	}
 
@@ -44,10 +44,10 @@ func (h *Handler) GetConversationToolCallDetail(c *gin.Context) {
 	)
 	if err != nil {
 		if errors.Is(err, appconversation.ErrToolCallNotFound) {
-			response.Error(c, http.StatusNotFound, "tool call not found")
+			response.ErrorFrom(c, http.StatusNotFound, err)
 			return
 		}
-		response.Error(c, http.StatusInternalServerError, "load tool call detail failed")
+		response.InternalError(c)
 		return
 	}
 	response.Success(c, toConversationToolCallDetailResponse(item))

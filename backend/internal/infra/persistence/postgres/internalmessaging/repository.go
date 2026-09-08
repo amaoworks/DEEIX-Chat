@@ -92,7 +92,7 @@ func (r *Repo) recordMessage(tx *gorm.DB, item domainmessaging.MessageIndex) (bo
 		if item.MetadataJSON != "" {
 			err := tx.Model(&model.InternalMessagingMessage{}).
 				Where("mid = ? AND (metadata_json = '' OR metadata_json = '{}')", item.MID).
-				Updates(map[string]interface{}{"metadata_json": item.MetadataJSON, "file_size": item.FileSize}).Error
+				Updates(map[string]any{"metadata_json": item.MetadataJSON, "file_size": item.FileSize}).Error
 			return false, err
 		}
 		return false, nil
@@ -108,12 +108,12 @@ func (r *Repo) recordMessage(tx *gorm.DB, item domainmessaging.MessageIndex) (bo
 	return true, nil
 }
 
-func (r *Repo) advanceConversation(tx *gorm.DB, userID, peerUserID uint, mid int64, preview string, sentAt interface{}, incrementUnread bool) error {
+func (r *Repo) advanceConversation(tx *gorm.DB, userID, peerUserID uint, mid int64, preview string, sentAt any, incrementUnread bool) error {
 	state := model.InternalMessagingConversation{UserID: userID, PeerUserID: peerUserID}
 	if err := tx.Where("user_id = ? AND peer_user_id = ?", userID, peerUserID).FirstOrCreate(&state).Error; err != nil {
 		return err
 	}
-	updates := map[string]interface{}{
+	updates := map[string]any{
 		"last_message_mid":     gorm.Expr("CASE WHEN last_message_mid < ? THEN ? ELSE last_message_mid END", mid, mid),
 		"last_message_preview": gorm.Expr("CASE WHEN last_message_mid < ? THEN ? ELSE last_message_preview END", mid, preview),
 		"last_message_at":      gorm.Expr("CASE WHEN last_message_mid < ? THEN ? ELSE last_message_at END", mid, sentAt),
@@ -236,7 +236,7 @@ func (r *Repo) SetConversationPreferences(ctx context.Context, userID, peerUserI
 		if err := tx.Where("user_id = ? AND peer_user_id = ?", userID, peerUserID).FirstOrCreate(&state).Error; err != nil {
 			return err
 		}
-		updates := map[string]interface{}{}
+		updates := map[string]any{}
 		if pinned != nil {
 			updates["pinned"] = *pinned
 		}
@@ -308,7 +308,7 @@ func (r *Repo) EditMessage(ctx context.Context, senderUserID uint, mid int64, co
 		if err := tx.Where("mid = ? AND sender_user_id = ? AND message_deleted = ?", mid, senderUserID, false).First(&item).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&item).Updates(map[string]interface{}{
+		if err := tx.Model(&item).Updates(map[string]any{
 			"content_type": contentType, "content": content, "metadata_json": metadataJSON,
 			"edited_at": gorm.Expr("CURRENT_TIMESTAMP"),
 		}).Error; err != nil {
@@ -330,7 +330,7 @@ func (r *Repo) DeleteMessage(ctx context.Context, actorUserID uint, mid int64) e
 		if item.MessageDeleted {
 			return nil
 		}
-		if err := tx.Model(&item).Updates(map[string]interface{}{
+		if err := tx.Model(&item).Updates(map[string]any{
 			"message_deleted": true, "content": "", "metadata_json": "{}",
 		}).Error; err != nil {
 			return err

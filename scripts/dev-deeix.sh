@@ -174,7 +174,7 @@ fi
 
 printf '%s\n' \
   "Starting DEEIX development services..." \
-  "API toolchain: Docker, Go 1.26.5 (no host make/Go installation required)" \
+  "API toolchain: Docker, Go 1.26.8 (no host make/Go installation required)" \
   "Web listen: $WEB_BIND:$WEB_PORT" \
   "Web local: http://127.0.0.1:$WEB_PORT" \
   "Web external: $WEB_URL" \

@@ -338,7 +338,8 @@
     "moderationBlocked": "Content blocked",
     "moderationBlockedDescription": "This response was withdrawn after a safety check.",
     "moderationEventId": "Event ID: {id}",
-    "moderationCategories": "Categories: {categories}"
+    "moderationCategories": "Categories: {categories}",
+    "moderationBlockedBilled": "Upstream usage incurred before the block is billed as usual."
   },
   "data": {
     "signInRequired": "Sign in before loading conversation messages.",

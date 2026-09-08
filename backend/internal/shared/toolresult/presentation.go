@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/tokenestimate"
 )
 
 const (
@@ -32,7 +34,7 @@ type Presentation struct {
 }
 
 type toolTracePayloadNode struct {
-	value interface{}
+	value any
 	depth int
 }
 
@@ -62,7 +64,7 @@ func BuildPresentation(raw string) *Presentation {
 
 	presentation := &Presentation{}
 	sourceIndexes := make(map[string]int)
-	var payload interface{}
+	var payload any
 	if err := json.Unmarshal([]byte(value), &payload); err != nil {
 		presentation.Text = value
 		collectToolTraceTextSources(presentation, sourceIndexes, value)
@@ -82,12 +84,12 @@ func BuildPresentation(raw string) *Presentation {
 				if current.depth < toolTracePresentationMaxDepth {
 					pending = appendToolTracePayloadNodes(pending, embeddedPayloads, current.depth+1)
 				}
-			case []interface{}:
+			case []any:
 				if current.depth >= toolTracePresentationMaxDepth {
 					continue
 				}
 				pending = appendToolTracePayloadNodes(pending, typed, current.depth+1)
-			case map[string]interface{}:
+			case map[string]any:
 				collectToolTraceRecordSource(presentation, sourceIndexes, typed)
 				if presentation.Text == "" && strings.EqualFold(firstToolTracePresentationString(typed, "type"), "text") {
 					presentation.Text = firstToolTracePresentationString(typed, "text")
@@ -120,7 +122,7 @@ func BuildPresentation(raw string) *Presentation {
 
 func appendToolTracePayloadNodes(
 	pending []toolTracePayloadNode,
-	values []interface{},
+	values []any,
 	depth int,
 ) []toolTracePayloadNode {
 	available := toolTracePresentationMaxNodes - len(pending)
@@ -136,7 +138,7 @@ func appendToolTracePayloadNodes(
 	return pending
 }
 
-func orderedToolTraceRecordValues(record map[string]interface{}) []interface{} {
+func orderedToolTraceRecordValues(record map[string]any) []any {
 	keys := make([]string, 0, len(record))
 	for key := range record {
 		keys = append(keys, key)
@@ -150,7 +152,7 @@ func orderedToolTraceRecordValues(record map[string]interface{}) []interface{} {
 		return keys[left] < keys[right]
 	})
 
-	values := make([]interface{}, 0, len(keys))
+	values := make([]any, 0, len(keys))
 	for _, key := range keys {
 		values = append(values, record[key])
 	}
@@ -190,9 +192,9 @@ func toolTracePresentationKeyRank(key string) int {
 // toolTraceNarrativeText separates standalone structured payloads from the
 // human-readable Markdown around them. Raw payloads remain available through
 // the tool result detail; the compact presentation only carries narrative text.
-func toolTraceNarrativeText(value string) (string, []interface{}) {
+func toolTraceNarrativeText(value string) (string, []any) {
 	var narrative strings.Builder
-	payloads := make([]interface{}, 0, 1)
+	payloads := make([]any, 0, 1)
 	fenceMarker := byte(0)
 	fenceWidth := 0
 
@@ -219,11 +221,11 @@ func toolTraceNarrativeText(value string) (string, []interface{}) {
 
 		if fenceMarker == 0 && indentWidth < 4 && len(trimmed) > 0 &&
 			(trimmed[0] == '{' || trimmed[0] == '[') {
-			var payload interface{}
+			var payload any
 			decoder := json.NewDecoder(strings.NewReader(value[offset+indentWidth:]))
 			if err := decoder.Decode(&payload); err == nil {
 				switch payload.(type) {
-				case map[string]interface{}, []interface{}:
+				case map[string]any, []any:
 					payloads = append(payloads, payload)
 					offset += indentWidth + int(decoder.InputOffset())
 					continue
@@ -269,7 +271,7 @@ func toolTraceMarkdownFence(value string) (byte, int) {
 func collectToolTraceRecordSource(
 	presentation *Presentation,
 	indexes map[string]int,
-	record map[string]interface{},
+	record map[string]any,
 ) {
 	sourceURL := firstToolTracePresentationString(record, "url", "uri", "link", "href", "retrieved_url", "source_url")
 	if sourceURL == "" {
@@ -339,7 +341,7 @@ func normalizeToolTraceSourceURL(raw string) string {
 	return value
 }
 
-func firstToolTracePresentationString(record map[string]interface{}, keys ...string) string {
+func firstToolTracePresentationString(record map[string]any, keys ...string) string {
 	for _, key := range keys {
 		for candidate, raw := range record {
 			if normalizeToolTracePresentationKey(candidate) != key {
@@ -390,7 +392,7 @@ func Snippet(value string, maxChars int) string {
 
 func tokenSnippet(value string, maxTokens int64) string {
 	value = strings.TrimSpace(value)
-	if value == "" || maxTokens <= 0 || estimateTokens(value) <= maxTokens {
+	if value == "" || maxTokens <= 0 || tokenestimate.Estimate(value) <= maxTokens {
 		return value
 	}
 	runes := []rune(value)
@@ -398,7 +400,7 @@ func tokenSnippet(value string, maxTokens int64) string {
 	high := len(runes)
 	for low < high {
 		middle := (low + high + 1) / 2
-		if estimateTokens(strings.TrimSpace(string(runes[:middle]))+"…") <= maxTokens {
+		if tokenestimate.Estimate(strings.TrimSpace(string(runes[:middle]))+"…") <= maxTokens {
 			low = middle
 		} else {
 			high = middle - 1
@@ -407,32 +409,10 @@ func tokenSnippet(value string, maxTokens int64) string {
 	return strings.TrimSpace(string(runes[:low])) + "…"
 }
 
-func estimateTokens(value string) int64 {
-	var cjk int64
-	var other int64
-	for _, char := range value {
-		if isCJKRune(char) {
-			cjk++
-		} else {
-			other++
-		}
-	}
-	return (cjk*2+2)/3 + (other+3)/4
-}
-
-func isCJKRune(char rune) bool {
-	return (char >= 0x3400 && char <= 0x4DBF) ||
-		(char >= 0x4E00 && char <= 0x9FFF) ||
-		(char >= 0x3040 && char <= 0x30FF) ||
-		(char >= 0xAC00 && char <= 0xD7AF) ||
-		(char >= 0xF900 && char <= 0xFAFF) ||
-		(char >= 0x20000 && char <= 0x2A6DF)
-}
-
 // ReadablePreview returns the first useful narrative value from generic JSON.
-func ReadablePreview(value interface{}) string {
+func ReadablePreview(value any) string {
 	switch typed := value.(type) {
-	case []interface{}:
+	case []any:
 		parts := make([]string, 0, min(len(typed), 3))
 		for _, item := range typed {
 			if text := ReadablePreview(item); text != "" {
@@ -443,7 +423,7 @@ func ReadablePreview(value interface{}) string {
 			}
 		}
 		return strings.Join(parts, "；")
-	case map[string]interface{}:
+	case map[string]any:
 		for _, key := range []string{"summary", "answer", "text", "content", "message", "result"} {
 			if text := stringValue(typed[key]); text != "" {
 				return text
@@ -471,7 +451,7 @@ func ReadablePreview(value interface{}) string {
 	return ""
 }
 
-func stringValue(value interface{}) string {
+func stringValue(value any) string {
 	text, ok := value.(string)
 	if !ok {
 		return ""

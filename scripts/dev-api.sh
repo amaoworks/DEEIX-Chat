@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 STATE_DIR=${DEEIX_DEV_STATE_DIR:-"$PROJECT_DIR/.deeix/deeix"}
-IMAGE=${DEEIX_DEV_API_IMAGE:-deeix-chat-dev-api:go1.26.5}
+IMAGE=${DEEIX_DEV_API_IMAGE:-deeix-chat-dev-api:go1.26.8}
 CONTAINER_NAME=${DEEIX_DEV_API_CONTAINER:-deeix-api-dev}
 
 cleanup() {
@@ -18,7 +18,7 @@ trap 'exit 143' HUP TERM
 mkdir -p "$STATE_DIR/go-mod" "$STATE_DIR/go-build"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  printf '%s\n' "Building the pinned Go 1.26.5 DEEIX development toolchain..."
+  printf '%s\n' "Building the pinned Go 1.26.8 DEEIX development toolchain..."
   docker build -t "$IMAGE" "$PROJECT_DIR/docker/deeix-dev-api"
 fi
 

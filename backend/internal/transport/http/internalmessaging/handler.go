@@ -10,14 +10,18 @@ import (
 	"strconv"
 	"strings"
 
+	appaudit "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
 	app "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/internalmessaging"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
 
+var errUnavailable = apperr.New("internal_messaging.unavailable", "internal messaging is unavailable")
+
 type auditWriter interface {
-	Write(context.Context, string, uint, string, string, string, string, string, interface{})
+	Write(context.Context, appaudit.WriteInput)
 }
 
 type Handler struct {
@@ -151,7 +155,7 @@ func (h *Handler) ListConversations(c *gin.Context) {
 
 func (h *Handler) ListUsers(c *gin.Context) {
 	if h.service == nil {
-		response.Error(c, http.StatusServiceUnavailable, "internal messaging is disabled")
+		response.ErrorFrom(c, http.StatusServiceUnavailable, app.ErrDisabled)
 		return
 	}
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -296,9 +300,9 @@ func (h *Handler) SendFile(c *gin.Context) {
 		writeError(c, err)
 		return
 	}
-	detail := map[string]interface{}{}
+	detail := map[string]any{}
 	if item.File != nil {
-		detail = map[string]interface{}{"name": item.File.Name, "size": item.File.Size, "content_type": item.File.ContentType}
+		detail = map[string]any{"name": item.File.Name, "size": item.File.Size, "content_type": item.File.ContentType}
 	}
 	h.writeAudit(c, "internal_message_file_send", item.ID, detail)
 	response.Success(c, toMessageResponse(item))
@@ -306,7 +310,7 @@ func (h *Handler) SendFile(c *gin.Context) {
 
 func (h *Handler) AdminStatus(c *gin.Context) {
 	if h.service == nil {
-		response.Error(c, http.StatusServiceUnavailable, "internal messaging is unavailable")
+		response.ErrorFrom(c, http.StatusServiceUnavailable, errUnavailable)
 		return
 	}
 	stats := h.service.Stats(c.Request.Context())
@@ -317,11 +321,15 @@ func (h *Handler) AdminStatus(c *gin.Context) {
 	})
 }
 
-func (h *Handler) writeAudit(c *gin.Context, action string, mid int64, detail interface{}) {
+func (h *Handler) writeAudit(c *gin.Context, action string, mid int64, detail any) {
 	if h.audit == nil {
 		return
 	}
-	h.audit.Write(c.Request.Context(), middleware.MustRequestID(c), middleware.MustUserID(c), action, "internal_message", strconv.FormatInt(mid, 10), c.ClientIP(), c.Request.UserAgent(), detail)
+	h.audit.Write(c.Request.Context(), appaudit.WriteInput{
+		RequestID: middleware.MustRequestID(c), ActorUserID: middleware.MustUserID(c),
+		Action: action, Resource: "internal_message", ResourceID: strconv.FormatInt(mid, 10),
+		IP: c.ClientIP(), UserAgent: c.Request.UserAgent(), Detail: detail,
+	})
 }
 
 func (h *Handler) DownloadFile(c *gin.Context) {
@@ -511,16 +519,16 @@ func toMessagePageResponse(page app.MessagePage) messagePageResponse {
 func writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, app.ErrDisabled):
-		response.Error(c, http.StatusServiceUnavailable, err.Error())
+		response.ErrorFrom(c, http.StatusServiceUnavailable, err)
 	case errors.Is(err, app.ErrRecipientUnavailable):
-		response.Error(c, http.StatusForbidden, err.Error())
+		response.ErrorFrom(c, http.StatusForbidden, err)
 	case errors.Is(err, app.ErrMessageUnavailable):
-		response.Error(c, http.StatusNotFound, err.Error())
+		response.ErrorFrom(c, http.StatusNotFound, err)
 	case errors.Is(err, app.ErrFileTooLarge):
-		response.Error(c, http.StatusRequestEntityTooLarge, err.Error())
+		response.ErrorFrom(c, http.StatusRequestEntityTooLarge, err)
 	case errors.Is(err, app.ErrQuotaExceeded):
-		response.Error(c, http.StatusConflict, err.Error())
+		response.ErrorFrom(c, http.StatusConflict, err)
 	default:
-		response.Error(c, http.StatusBadGateway, "internal messaging unavailable")
+		response.ErrorFrom(c, http.StatusBadGateway, errUnavailable)
 	}
 }

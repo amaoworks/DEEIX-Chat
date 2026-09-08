@@ -229,7 +229,7 @@ type FileObject struct {
 	ProcessingAttemptID    string     `gorm:"size:64;not null;default:'';comment:当前文件处理执行令牌"`
 	ProcessingStartedAt    *time.Time `gorm:"comment:处理开始时间"`
 	ProcessingCompletedAt  *time.Time `gorm:"comment:处理完成时间"`
-	RagOptOut              bool       `gorm:"not null;default:false;comment:用户是否关闭此文件的RAG检索"`
+	RAGOptOut              bool       `gorm:"not null;default:false;comment:用户是否关闭此文件的RAG检索"`
 }
 
 // TableName 指定表名。

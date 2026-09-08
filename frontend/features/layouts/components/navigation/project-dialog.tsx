@@ -494,142 +494,134 @@ export function ProjectDialog({
               />
             </div>
 
-            <div className="grid gap-4 border-t border-border/60 pt-4 sm:grid-cols-2 sm:items-start">
-              <div className="min-w-0 space-y-3">
-                <div className="space-y-1">
-                  <label htmlFor={defaultModelInputID} className="text-xs text-muted-foreground">
-                    {t("defaultModelLabel")}
-                  </label>
-                  {modelCatalogLoading ? (
-                    <Button
-                      id={defaultModelInputID}
-                      type="button"
-                      variant="outline"
-                      className="h-8 w-full justify-start gap-2 px-3 font-normal shadow-none"
-                      disabled
-                    >
-                      <Spinner className="size-3.5" />
-                      {t("defaultModelLoading")}
-                    </Button>
-                  ) : (
-                    <ModelSelect
-                      id={defaultModelInputID}
-                      value={stableDraft?.defaultModel.trim() || PROJECT_DEFAULT_MODEL_INHERIT_VALUE}
-                      fallbackValue={PROJECT_DEFAULT_MODEL_INHERIT_VALUE}
-                      options={modelOptions}
-                      valueAlign="start"
-                      itemAlign="start"
-                      contentClassName="min-w-[min(24rem,calc(100vw-3rem))]"
-                      triggerClassName="h-8 shadow-none"
-                      portalContainer={dialogContentRef}
-                      onChange={(value) => {
-                        const defaultModel = value === PROJECT_DEFAULT_MODEL_INHERIT_VALUE ? "" : value;
-                        setDraft((current) => current ? { ...current, defaultModel } : current);
-                      }}
-                      disabled={submitting}
-                    />
-                  )}
-                  <p className="text-[11px] leading-4 text-muted-foreground">{t("defaultModelDescription")}</p>
-                </div>
-
-                <ProjectDefaultSelector
-                  icon={Wrench}
-                  label={t("mcpDefaultsLabel")}
-                  description={inheritGlobalMCPDefaults ? t("inheritGlobalMCPDefaultsDescription") : t("mcpDefaultsDescription")}
-                  emptyLabel={t("mcpDefaultsEmpty")}
-                  searchPlaceholder={t("searchMCPTools")}
-                  options={mcpTools.map((tool) => ({
-                    id: tool.id,
-                    label: tool.displayName || tool.name,
-                    detail: tool.serverName,
-                  }))}
-                  selectedIDs={inheritGlobalMCPDefaults ? [] : (stableDraft?.defaultMCPToolIDs ?? [])}
-                  selectionLimit={selectionLimit}
-                  loading={catalogLoading}
-                  disabled={submitting}
-                  exclusiveOption={{
-                    active: inheritGlobalMCPDefaults,
-                    icon: Globe2,
-                    label: t("inheritGlobalMCPDefaults"),
-                    detail: t("inheritGlobalMCPDefaultsDescription"),
-                    onChange: (active) => {
-                      setDraft((current) => current
-                        ? {
-                            ...current,
-                            mcpDefaultMode: active ? "inherit" : "custom",
-                            defaultMCPToolIDs: [],
-                          }
-                        : current);
-                    },
-                  }}
-                  onChange={(defaultMCPToolIDs) => {
-                    if (hasMultipleImageAttachmentProcessors(defaultMCPToolIDs, mcpTools)) {
-                      toast.error(t("imageProcessorLimitTitle"), {
-                        description: t("imageProcessorLimitDescription"),
-                      });
-                      return;
-                    }
-                    setDraft((current) => current
-                      ? { ...current, mcpDefaultMode: "custom", defaultMCPToolIDs }
-                      : current);
-                  }}
-                />
-              </div>
-
-              <div className="min-w-0 space-y-3">
-                <ProjectDefaultSelector
-                  icon={Box}
-                  label={t("selectSkills")}
-                  description={t("skillDefaultsDescription")}
-                  emptyLabel={t("skillDefaultsEmpty")}
-                  searchPlaceholder={t("searchSkills")}
-                  options={skillCatalog.items.map((skill) => ({
-                    id: skill.id,
-                    label: skill.title,
-                    detail: skill.description.trim() || (skill.trigger ? `/${skill.trigger}` : ""),
-                  }))}
-                  selectedIDs={stableDraft?.defaultSkillIDs ?? []}
-                  selectionLimit={selectionLimit}
-                  loading={skillCatalog.loading && skillCatalog.items.length === 0}
-                  searching={skillCatalog.loading}
-                  loadingMore={skillCatalog.loadingMore}
-                  hasMore={skillCatalog.hasMore}
-                  disabled={submitting || catalogLoading}
-                  onQueryChange={skillCatalog.setQuery}
-                  onLoadMore={skillCatalog.loadMore}
-                  onChange={(defaultSkillIDs) => {
-                    setDraft((current) => current ? { ...current, defaultSkillIDs } : current);
-                  }}
-                />
-
-                {knowledgeBaseEnabled ? (
-                  <ProjectDefaultSelector
-                    icon={BookOpen}
-                    label={t("selectKnowledgeBases")}
-                    description={t("knowledgeBaseDefaultsDescription")}
-                    emptyLabel={t("knowledgeBaseDefaultsEmpty")}
-                    searchPlaceholder={t("searchKnowledgeBases")}
-                    options={knowledgeBaseCatalog.items.map((item) => ({
-                      id: item.publicID,
-                      label: item.name,
-                      detail: `${item.scope === "builtin" ? t("builtinKnowledgeBase") : t("personalKnowledgeBase")} · ${t("knowledgeBaseFileCount", { count: item.readyFileCount })}`,
-                      disabled: item.readyFileCount === 0,
-                    }))}
-                    selectedIDs={stableDraft?.defaultKnowledgeBaseIDs ?? []}
-                    selectionLimit={8}
-                    loading={knowledgeBaseCatalog.loading && knowledgeBaseCatalog.items.length === 0}
-                    searching={knowledgeBaseCatalog.loading}
-                    loadingMore={knowledgeBaseCatalog.loadingMore}
-                    hasMore={knowledgeBaseCatalog.hasMore}
-                    disabled={submitting}
-                    onQueryChange={knowledgeBaseCatalog.setQuery}
-                    onLoadMore={knowledgeBaseCatalog.loadMore}
-                    onChange={(defaultKnowledgeBaseIDs) => {
-                      setDraft((current) => current ? { ...current, defaultKnowledgeBaseIDs } : current);
+            <div className="grid gap-4 sm:grid-cols-2 sm:items-start">
+              <div className="min-w-0 space-y-1">
+                <label htmlFor={defaultModelInputID} className="block text-xs text-muted-foreground">
+                  {t("defaultModelLabel")}
+                </label>
+                {modelCatalogLoading ? (
+                  <Button
+                    id={defaultModelInputID}
+                    type="button"
+                    variant="outline"
+                    className="h-8 w-full justify-start gap-2 px-3 font-normal shadow-none"
+                    disabled
+                  >
+                    <Spinner className="size-3.5" />
+                    {t("defaultModelLoading")}
+                  </Button>
+                ) : (
+                  <ModelSelect
+                    id={defaultModelInputID}
+                    value={stableDraft?.defaultModel.trim() || PROJECT_DEFAULT_MODEL_INHERIT_VALUE}
+                    fallbackValue={PROJECT_DEFAULT_MODEL_INHERIT_VALUE}
+                    options={modelOptions}
+                    valueAlign="start"
+                    itemAlign="start"
+                    contentClassName="min-w-[min(24rem,calc(100vw-3rem))]"
+                    triggerClassName="h-8 shadow-none"
+                    portalContainer={dialogContentRef}
+                    onChange={(value) => {
+                      const defaultModel = value === PROJECT_DEFAULT_MODEL_INHERIT_VALUE ? "" : value;
+                      setDraft((current) => current ? { ...current, defaultModel } : current);
                     }}
+                    disabled={submitting}
                   />
-                ) : null}
+                )}
               </div>
+
+              <ProjectDefaultSelector
+                icon={Wrench}
+                label={t("mcpDefaultsLabel")}
+                emptyLabel={t("mcpDefaultsEmpty")}
+                searchPlaceholder={t("searchMCPTools")}
+                options={mcpTools.map((tool) => ({
+                  id: tool.id,
+                  label: tool.displayName || tool.name,
+                  detail: tool.serverName,
+                }))}
+                selectedIDs={inheritGlobalMCPDefaults ? [] : (stableDraft?.defaultMCPToolIDs ?? [])}
+                selectionLimit={selectionLimit}
+                loading={catalogLoading}
+                disabled={submitting}
+                exclusiveOption={{
+                  active: inheritGlobalMCPDefaults,
+                  icon: Globe2,
+                  label: t("inheritGlobalMCPDefaults"),
+                  detail: t("inheritGlobalMCPDefaultsDescription"),
+                  onChange: (active) => {
+                    setDraft((current) => current
+                      ? {
+                          ...current,
+                          mcpDefaultMode: active ? "inherit" : "custom",
+                          defaultMCPToolIDs: [],
+                        }
+                      : current);
+                  },
+                }}
+                onChange={(defaultMCPToolIDs) => {
+                  if (hasMultipleImageAttachmentProcessors(defaultMCPToolIDs, mcpTools)) {
+                    toast.error(t("imageProcessorLimitTitle"), {
+                      description: t("imageProcessorLimitDescription"),
+                    });
+                    return;
+                  }
+                  setDraft((current) => current
+                    ? { ...current, mcpDefaultMode: "custom", defaultMCPToolIDs }
+                    : current);
+                }}
+              />
+
+              {knowledgeBaseEnabled ? (
+                <ProjectDefaultSelector
+                  icon={BookOpen}
+                  label={t("selectKnowledgeBases")}
+                  emptyLabel={t("knowledgeBaseDefaultsEmpty")}
+                  searchPlaceholder={t("searchKnowledgeBases")}
+                  options={knowledgeBaseCatalog.items.map((item) => ({
+                    id: item.publicID,
+                    label: item.name,
+                    detail: `${item.scope === "builtin" ? t("builtinKnowledgeBase") : t("personalKnowledgeBase")} · ${t("knowledgeBaseFileCount", { count: item.readyFileCount })}`,
+                    disabled: item.readyFileCount === 0,
+                  }))}
+                  selectedIDs={stableDraft?.defaultKnowledgeBaseIDs ?? []}
+                  selectionLimit={8}
+                  loading={knowledgeBaseCatalog.loading && knowledgeBaseCatalog.items.length === 0}
+                  searching={knowledgeBaseCatalog.loading}
+                  loadingMore={knowledgeBaseCatalog.loadingMore}
+                  hasMore={knowledgeBaseCatalog.hasMore}
+                  disabled={submitting}
+                  onQueryChange={knowledgeBaseCatalog.setQuery}
+                  onLoadMore={knowledgeBaseCatalog.loadMore}
+                  onChange={(defaultKnowledgeBaseIDs) => {
+                    setDraft((current) => current ? { ...current, defaultKnowledgeBaseIDs } : current);
+                  }}
+                />
+              ) : null}
+
+              <ProjectDefaultSelector
+                icon={Box}
+                label={t("selectSkills")}
+                emptyLabel={t("skillDefaultsEmpty")}
+                searchPlaceholder={t("searchSkills")}
+                options={skillCatalog.items.map((skill) => ({
+                  id: skill.id,
+                  label: skill.title,
+                  detail: skill.description.trim() || (skill.trigger ? `/${skill.trigger}` : ""),
+                }))}
+                selectedIDs={stableDraft?.defaultSkillIDs ?? []}
+                selectionLimit={selectionLimit}
+                loading={skillCatalog.loading && skillCatalog.items.length === 0}
+                searching={skillCatalog.loading}
+                loadingMore={skillCatalog.loadingMore}
+                hasMore={skillCatalog.hasMore}
+                disabled={submitting || catalogLoading}
+                onQueryChange={skillCatalog.setQuery}
+                onLoadMore={skillCatalog.loadMore}
+                onChange={(defaultSkillIDs) => {
+                  setDraft((current) => current ? { ...current, defaultSkillIDs } : current);
+                }}
+              />
             </div>
           </div>
 
@@ -650,7 +642,6 @@ export function ProjectDialog({
 function ProjectDefaultSelector<T extends string | number>({
   icon: Icon,
   label,
-  description,
   emptyLabel,
   searchPlaceholder,
   options,
@@ -668,7 +659,6 @@ function ProjectDefaultSelector<T extends string | number>({
 }: {
   icon: LucideIcon;
   label: string;
-  description: string;
   emptyLabel: string;
   searchPlaceholder: string;
   options: ProjectDefaultOption<T>[];
@@ -712,8 +702,8 @@ function ProjectDefaultSelector<T extends string | number>({
       : emptyLabel;
 
   return (
-    <div className="space-y-1 pt-1">
-      <p className="text-xs text-muted-foreground">{label}</p>
+    <div className="min-w-0 space-y-1">
+      <p className="block text-xs text-muted-foreground">{label}</p>
       <Popover
         modal
         open={open}
@@ -827,7 +817,6 @@ function ProjectDefaultSelector<T extends string | number>({
           </div>
         </PopoverContent>
       </Popover>
-      <p className="text-[11px] leading-4 text-muted-foreground">{description}</p>
     </div>
   );
 }
