@@ -51,6 +51,8 @@ export type AdminInternalMessagingStatus = {
   activeSSE: number;
   voceRequests: number;
   voceFailures: number;
+  indexFailures: number;
+  pendingIndexRepairs: number;
   averageLatencyMS: number;
   indexedMessages: number;
   fileBytes: number;

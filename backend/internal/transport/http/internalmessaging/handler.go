@@ -79,15 +79,17 @@ type fileResponse struct {
 	Height      uint32 `json:"height"`
 }
 type adminStatusResponse struct {
-	Configured       bool  `json:"configured"`
-	Enabled          bool  `json:"enabled"`
-	Healthy          bool  `json:"healthy"`
-	ActiveSSE        int64 `json:"activeSSE"`
-	VoceRequests     int64 `json:"voceRequests"`
-	VoceFailures     int64 `json:"voceFailures"`
-	AverageLatencyMS int64 `json:"averageLatencyMS"`
-	IndexedMessages  int64 `json:"indexedMessages"`
-	FileBytes        int64 `json:"fileBytes"`
+	Configured          bool  `json:"configured"`
+	Enabled             bool  `json:"enabled"`
+	Healthy             bool  `json:"healthy"`
+	ActiveSSE           int64 `json:"activeSSE"`
+	VoceRequests        int64 `json:"voceRequests"`
+	VoceFailures        int64 `json:"voceFailures"`
+	AverageLatencyMS    int64 `json:"averageLatencyMS"`
+	IndexFailures       int64 `json:"indexFailures"`
+	PendingIndexRepairs int64 `json:"pendingIndexRepairs"`
+	IndexedMessages     int64 `json:"indexedMessages"`
+	FileBytes           int64 `json:"fileBytes"`
 }
 type messagePageResponse struct {
 	Results    []messageResponse `json:"results"`
@@ -274,6 +276,20 @@ func (h *Handler) Delete(c *gin.Context) {
 func (h *Handler) SendFile(c *gin.Context) {
 	maxBytes := h.service.CurrentPolicy().MaxFileBytes
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes+(1<<20))
+	// Spill large parts to disk instead of retaining a copy per concurrent upload.
+	parseErr := c.Request.ParseMultipartForm(1 << 20)
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
+	}
+	if parseErr != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(parseErr, &tooLarge) {
+			writeError(c, app.ErrFileTooLarge)
+		} else {
+			response.InvalidRequestBody(c, parseErr)
+		}
+		return
+	}
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		var tooLarge *http.MaxBytesError
@@ -290,12 +306,7 @@ func (h *Handler) SendFile(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	content, err := h.service.ReadUpload(file, fileHeader.Size)
-	if err != nil {
-		writeError(c, err)
-		return
-	}
-	item, err := h.service.SendFile(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), fileHeader.Filename, fileHeader.Header.Get("Content-Type"), content)
+	item, err := h.service.SendFileStream(c.Request.Context(), middleware.MustUserID(c), c.Param("publicID"), fileHeader.Filename, fileHeader.Header.Get("Content-Type"), file, fileHeader.Size)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -317,6 +328,7 @@ func (h *Handler) AdminStatus(c *gin.Context) {
 	response.Success(c, adminStatusResponse{
 		Configured: stats.Configured, Enabled: stats.Enabled, Healthy: stats.Healthy,
 		ActiveSSE: stats.ActiveSSE, VoceRequests: stats.VoceRequests, VoceFailures: stats.VoceFailures,
+		IndexFailures: stats.IndexFailures, PendingIndexRepairs: stats.PendingIndexRepairs,
 		AverageLatencyMS: stats.AverageLatencyMS, IndexedMessages: stats.IndexedMessages, FileBytes: stats.FileBytes,
 	})
 }
@@ -373,6 +385,7 @@ func (h *Handler) Events(c *gin.Context) {
 	}
 	defer upstream.Body.Close()
 	c.Header("Content-Type", "text/event-stream")
+	c.Header("X-Accel-Buffering", "no")
 	c.Header("Cache-Control", "no-cache, no-transform")
 	c.Header("Connection", "keep-alive")
 	c.Status(http.StatusOK)
@@ -381,7 +394,14 @@ func (h *Handler) Events(c *gin.Context) {
 		line, readErr := reader.ReadString('\n')
 		if line != "" {
 			line = h.enrichEventLine(c.Request.Context(), actorID, line)
-			_, _ = c.Writer.WriteString(line)
+			// Close without acknowledging the failed event. The browser resumes
+			// from its last successfully enriched MID once the index recovers.
+			if line == "" {
+				return
+			}
+			if _, err := c.Writer.WriteString(line); err != nil {
+				return
+			}
 			c.Writer.Flush()
 		}
 		if readErr != nil {
@@ -415,7 +435,7 @@ func (h *Handler) enrichEventLine(ctx context.Context, actorID uint, line string
 	}
 	publicID, err := h.service.ProcessEvent(ctx, raw)
 	if err != nil || publicID == "" {
-		return line
+		return ""
 	}
 	var payload map[string]json.RawMessage
 	if json.Unmarshal([]byte(raw), &payload) != nil {

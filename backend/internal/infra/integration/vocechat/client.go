@@ -116,6 +116,10 @@ func (c *Client) Delete(ctx context.Context, token string, mid int64) (int64, er
 }
 
 func (c *Client) UploadFile(ctx context.Context, token, filename, contentType string, content []byte) (UploadedFile, error) {
+	return c.UploadFileStream(ctx, token, filename, contentType, bytes.NewReader(content), int64(len(content)))
+}
+
+func (c *Client) UploadFileStream(ctx context.Context, token, filename, contentType string, content io.Reader, size int64) (UploadedFile, error) {
 	var fileID string
 	if err := c.requestJSON(ctx, http.MethodPost, "/api/resource/file/prepare", token, map[string]any{
 		"filename": filename, "content_type": contentType,
@@ -131,13 +135,12 @@ func (c *Client) UploadFile(ctx context.Context, token, filename, contentType st
 	if err := writer.WriteField("file_id", fileID); err != nil {
 		return UploadedFile{}, err
 	}
-	part, err := writer.CreateFormFile("chunk_data", filename)
+	_, err := writer.CreateFormFile("chunk_data", filename)
 	if err != nil {
 		return UploadedFile{}, err
 	}
-	if _, err = part.Write(content); err != nil {
-		return UploadedFile{}, err
-	}
+	prefix := append([]byte(nil), body.Bytes()...)
+	body.Reset()
 	if err = writer.WriteField("chunk_is_last", "true"); err != nil {
 		return UploadedFile{}, err
 	}
@@ -145,7 +148,7 @@ func (c *Client) UploadFile(ctx context.Context, token, filename, contentType st
 		return UploadedFile{}, err
 	}
 	var uploaded *UploadedFile
-	if err = c.requestRaw(ctx, http.MethodPost, "/api/resource/file/upload", token, writer.FormDataContentType(), body.Bytes(), &uploaded, nil); err != nil {
+	if err = c.requestReader(ctx, http.MethodPost, "/api/resource/file/upload", token, writer.FormDataContentType(), io.MultiReader(bytes.NewReader(prefix), content, bytes.NewReader(body.Bytes())), int64(len(prefix))+size+int64(body.Len()), &uploaded, nil); err != nil {
 		return UploadedFile{}, err
 	}
 	if uploaded == nil || uploaded.Path == "" {
@@ -222,10 +225,15 @@ func (c *Client) requestJSON(ctx context.Context, method, path, token string, pa
 }
 
 func (c *Client) requestRaw(ctx context.Context, method, path, token, contentType string, payload []byte, output any, headers http.Header) error {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(payload))
+	return c.requestReader(ctx, method, path, token, contentType, bytes.NewReader(payload), int64(len(payload)), output, headers)
+}
+
+func (c *Client) requestReader(ctx context.Context, method, path, token, contentType string, payload io.Reader, size int64, output any, headers http.Header) error {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, payload)
 	if err != nil {
 		return err
 	}
+	req.ContentLength = size
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}

@@ -39,7 +39,9 @@
     "failures": "请求失败",
     "latency": "平均延迟",
     "messages": "索引消息",
-    "files": "文件占用"
+    "files": "文件占用",
+    "indexFailures": "索引写入失败",
+    "pendingIndexRepairs": "待修复索引任务"
   },
   "aboutPage": {
     "title": "关于",

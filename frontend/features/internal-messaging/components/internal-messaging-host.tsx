@@ -51,16 +51,10 @@ import { cn } from "@/lib/utils";
 import {
   deleteInternalMessagingMessage,
   downloadInternalMessagingFile,
-  editInternalMessagingMessage,
   getInternalMessagingStatus,
-  listInternalMessagingConversations,
   listInternalMessagingMessages,
   listInternalMessagingUsers,
-  markInternalMessagingRead,
-  replyInternalMessagingMessage,
   searchInternalMessagingMessages,
-  sendInternalMessagingFile,
-  sendInternalMessagingMessage,
   updateInternalMessagingPreferences,
 } from "@/shared/api/internal-messaging";
 import type {
@@ -71,28 +65,17 @@ import type {
 } from "@/shared/api/internal-messaging.types";
 import { useAuthSession } from "@/shared/auth/auth-session-context";
 
+import { useMessagingWindowLayout, RESIZE_HANDLES } from "./use-messaging-window-layout";
+import { useConversationList } from "./use-conversation-list";
+import { useMessageReadState } from "./use-message-read-state";
+import { useMessageComposer } from "./use-message-composer";
+import { shouldSendOnEnter } from "../model/message-composer";
+
 const LazyInternalMessageMarkdown = React.lazy(async () => {
   const module = await import("./internal-message-markdown");
   return { default: module.InternalMessageMarkdown };
 });
 
-type Point = { x: number; y: number };
-type WindowBounds = Point & { width: number; height: number };
-type DragSnapshot = {
-  pointerID: number;
-  startX: number;
-  startY: number;
-  origin: Point;
-  moved: boolean;
-};
-type ResizeDirection = "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw";
-type ResizeSnapshot = {
-  pointerID: number;
-  startX: number;
-  startY: number;
-  direction: ResizeDirection;
-  bounds: WindowBounds;
-};
 type PendingMessageScroll =
   | { mode: "bottom"; behavior: ScrollBehavior }
   | { mode: "preserve"; scrollHeight: number; scrollTop: number };
@@ -112,11 +95,6 @@ class MessageRenderBoundary extends React.Component<
   }
 }
 
-const VIEWPORT_MARGIN = 8;
-const BUTTON_SIZE = 44;
-const MIN_WINDOW_WIDTH = 320;
-const MIN_WINDOW_HEIGHT = 360;
-const LAYOUT_STORAGE_PREFIX = "deeix.internal-messaging.layout.v1";
 const NOTIFICATION_STORAGE_PREFIX = "deeix.internal-messaging.notifications.v1";
 const MESSAGE_BOTTOM_THRESHOLD = 80;
 const COMMON_EMOJIS = [
@@ -124,17 +102,6 @@ const COMMON_EMOJIS = [
   "😘", "😎", "🤔", "😅", "😭", "😡", "🥳", "🤩",
   "👍", "👎", "👏", "🙏", "💪", "👌", "✌️", "🤝",
   "❤️", "💔", "🔥", "🎉", "✨", "💯", "✅", "🚀",
-];
-
-const RESIZE_HANDLES: Array<{ direction: ResizeDirection; className: string }> = [
-  { direction: "n", className: "-top-1 left-3 right-3 h-2 cursor-n-resize" },
-  { direction: "ne", className: "-right-1 -top-1 size-4 cursor-ne-resize" },
-  { direction: "e", className: "-right-1 bottom-3 top-3 w-2 cursor-e-resize" },
-  { direction: "se", className: "-bottom-1 -right-1 size-5 cursor-se-resize" },
-  { direction: "s", className: "-bottom-1 left-3 right-3 h-2 cursor-s-resize" },
-  { direction: "sw", className: "-bottom-1 -left-1 size-4 cursor-sw-resize" },
-  { direction: "w", className: "-left-1 bottom-3 top-3 w-2 cursor-w-resize" },
-  { direction: "nw", className: "-left-1 -top-1 size-4 cursor-nw-resize" },
 ];
 
 function initials(value: string) {
@@ -154,72 +121,6 @@ function formatTime(value: string, locale: string) {
   }).format(date);
 }
 
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.min(Math.max(value, minimum), Math.max(minimum, maximum));
-}
-
-function initialWindowBounds(): WindowBounds {
-  if (typeof window === "undefined") {
-    return { x: 24, y: 24, width: 400, height: 600 };
-  }
-  const width = Math.min(400, Math.max(240, window.innerWidth - VIEWPORT_MARGIN * 2));
-  const height = Math.min(640, Math.max(320, window.innerHeight - VIEWPORT_MARGIN * 2));
-  return {
-    x: Math.max(VIEWPORT_MARGIN, window.innerWidth - width - 20),
-    y: Math.max(VIEWPORT_MARGIN, window.innerHeight - height - 20),
-    width,
-    height,
-  };
-}
-
-function clampWindowBounds(bounds: WindowBounds): WindowBounds {
-  const maximumWidth = Math.max(1, window.innerWidth - VIEWPORT_MARGIN * 2);
-  const maximumHeight = Math.max(1, window.innerHeight - VIEWPORT_MARGIN * 2);
-  const minimumWidth = Math.min(MIN_WINDOW_WIDTH, maximumWidth);
-  const minimumHeight = Math.min(MIN_WINDOW_HEIGHT, maximumHeight);
-  const width = clamp(bounds.width, minimumWidth, maximumWidth);
-  const height = clamp(bounds.height, minimumHeight, maximumHeight);
-  return {
-    x: clamp(bounds.x, VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN),
-    y: clamp(bounds.y, VIEWPORT_MARGIN, window.innerHeight - height - VIEWPORT_MARGIN),
-    width,
-    height,
-  };
-}
-
-function clampButtonPoint(point: Point): Point {
-  return {
-    x: clamp(point.x, VIEWPORT_MARGIN, window.innerWidth - BUTTON_SIZE - VIEWPORT_MARGIN),
-    y: clamp(point.y, VIEWPORT_MARGIN, window.innerHeight - BUTTON_SIZE - VIEWPORT_MARGIN),
-  };
-}
-
-function isPoint(value: unknown): value is Point {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<Point>;
-  return Number.isFinite(candidate.x) && Number.isFinite(candidate.y);
-}
-
-function isWindowBounds(value: unknown): value is WindowBounds {
-  if (!isPoint(value)) return false;
-  const candidate = value as Partial<WindowBounds>;
-  return Number.isFinite(candidate.width) && Number.isFinite(candidate.height);
-}
-
-function useMobileMessagingLayout() {
-  const [mobile, setMobile] = React.useState(false);
-
-  React.useEffect(() => {
-    const media = window.matchMedia("(max-width: 640px)");
-    const update = () => setMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  return mobile;
-}
-
 export function InternalMessagingWindowHost({
   initiallyOpen = false,
   initialStatus,
@@ -229,7 +130,6 @@ export function InternalMessagingWindowHost({
 }) {
   const t = useTranslations("internalMessaging");
   const locale = useLocale();
-  const mobileLayout = useMobileMessagingLayout();
   const { accessToken, user } = useAuthSession();
   const [enabled, setEnabled] = React.useState(initialStatus?.enabled || false);
   const [maxFileBytes, setMaxFileBytes] = React.useState(
@@ -239,6 +139,7 @@ export function InternalMessagingWindowHost({
     initialStatus?.browserNotifications ?? true,
   );
   const [open, setOpen] = React.useState(initiallyOpen);
+  const { mobileLayout, expanded, setExpanded, buttonPoint, windowBounds, startButtonDrag, moveButton, stopButtonDrag, openFromButton, startWindowDrag, moveWindow, stopWindowDrag, startResize, resizeWindow, stopResize } = useMessagingWindowLayout(user?.publicID || "", () => setOpen(true));
   const [users, setUsers] = React.useState<InternalMessagingUser[]>([]);
   const [conversations, setConversations] = React.useState<InternalMessagingConversation[]>([]);
   const [directoryView, setDirectoryView] = React.useState<"recent" | "users">("recent");
@@ -247,16 +148,11 @@ export function InternalMessagingWindowHost({
   const [hasMoreUsers, setHasMoreUsers] = React.useState(false);
   const [selected, setSelected] = React.useState<InternalMessagingUser | null>(null);
   const [messages, setMessages] = React.useState<InternalMessagingMessage[]>([]);
-  const [draft, setDraft] = React.useState("");
   const [loadingUsers, setLoadingUsers] = React.useState(false);
   const [loadingMessages, setLoadingMessages] = React.useState(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = React.useState(false);
   const [hasMoreMessages, setHasMoreMessages] = React.useState(false);
   const [nextBefore, setNextBefore] = React.useState(0);
-  const [sending, setSending] = React.useState(false);
-  const [replyTo, setReplyTo] = React.useState<InternalMessagingMessage | null>(null);
-  const [editing, setEditing] = React.useState<InternalMessagingMessage | null>(null);
-  const [uploading, setUploading] = React.useState(false);
   const [unreadByUser, setUnreadByUser] = React.useState<Record<string, number>>({});
   const [totalUnread, setTotalUnread] = React.useState(initialStatus?.unreadCount || 0);
   const [messageSearchOpen, setMessageSearchOpen] = React.useState(false);
@@ -274,20 +170,16 @@ export function InternalMessagingWindowHost({
   const [previewMessage, setPreviewMessage] =
     React.useState<InternalMessagingMessage | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
+  const [connected, setConnected] = React.useState(false);
   const [presenceReady, setPresenceReady] = React.useState(false);
   const [onlineByUser, setOnlineByUser] = React.useState<Record<string, boolean>>({});
-  const [buttonPoint, setButtonPoint] = React.useState<Point | null>(null);
-  const [windowBounds, setWindowBounds] = React.useState<WindowBounds>(initialWindowBounds);
   const selectedRef = React.useRef<InternalMessagingUser | null>(null);
-  const buttonDragRef = React.useRef<DragSnapshot | null>(null);
-  const windowDragRef = React.useRef<DragSnapshot | null>(null);
-  const resizeRef = React.useRef<ResizeSnapshot | null>(null);
-  const suppressButtonClickRef = React.useRef(false);
-  const layoutHydratedRef = React.useRef(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const messageViewportRef = React.useRef<HTMLDivElement | null>(null);
   const messagesRef = React.useRef<InternalMessagingMessage[]>([]);
+  const reconnectHistoryRef = React.useRef(false);
+  const hasConnectedRef = React.useRef(false);
   const nearMessageBottomRef = React.useRef(true);
   const pendingMessageScrollRef = React.useRef<PendingMessageScroll | null>(null);
   const messageRequestRef = React.useRef<{
@@ -296,7 +188,6 @@ export function InternalMessagingWindowHost({
   }>({ sequence: 0, controller: null });
   const conversationRefreshTimerRef = React.useRef<number | null>(null);
   const messageRefreshTimerRef = React.useRef<number | null>(null);
-  const readRetryTimersRef = React.useRef<Set<number>>(new Set());
   const messageCacheRef = React.useRef<Map<string, CachedConversation>>(new Map());
   const messagePrefetchRef = React.useRef<Map<string, Promise<void>>>(new Map());
   selectedRef.current = selected;
@@ -305,7 +196,8 @@ export function InternalMessagingWindowHost({
   const scrollToMessageBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     const viewport = messageViewportRef.current;
     if (!viewport) return;
-    viewport.scrollTo({ top: viewport.scrollHeight, behavior });
+    // Smooth targets drift while virtual rows are being measured.
+    viewport.scrollTo({ top: viewport.scrollHeight, behavior: messagesRef.current.length > 120 ? "auto" : behavior });
     nearMessageBottomRef.current = true;
     setNewMessagesBelow(false);
   }, []);
@@ -346,7 +238,10 @@ export function InternalMessagingWindowHost({
     const distance = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
     const nearBottom = distance <= MESSAGE_BOTTOM_THRESHOLD;
     nearMessageBottomRef.current = nearBottom;
-    if (nearBottom) setNewMessagesBelow(false);
+    if (nearBottom) {
+      setNewMessagesBelow(false);
+      acknowledgeVisibleMessages();
+    }
   };
 
   React.useEffect(() => {
@@ -361,7 +256,7 @@ export function InternalMessagingWindowHost({
           setBrowserNotificationsAllowed(status.browserNotifications);
         })
         .catch(() => {
-          if (!disposed) setEnabled(false);
+          // Keep the configured feature and drafts visible during transient outages.
         });
     };
     refresh();
@@ -379,83 +274,38 @@ export function InternalMessagingWindowHost({
     setOpen(false);
     setSelected(null);
     setMessages([]);
-    setReplyTo(null);
-    setEditing(null);
     setPreviewMessage(null);
   }, [enabled]);
 
   React.useEffect(() => {
-    setButtonPoint((current) =>
-      current
-        ? clampButtonPoint(current)
-        : {
-            x: window.innerWidth - BUTTON_SIZE - 20,
-            y: window.innerHeight - BUTTON_SIZE - 20,
-          },
-    );
-    setWindowBounds((current) => clampWindowBounds(current));
-
-    const handleResize = () => {
-      setButtonPoint((current) => (current ? clampButtonPoint(current) : current));
-      setWindowBounds((current) => clampWindowBounds(current));
-    };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
-
-  React.useEffect(() => {
-    if (!user?.publicID) return;
-    layoutHydratedRef.current = false;
     try {
-      const raw = window.localStorage.getItem(`${LAYOUT_STORAGE_PREFIX}:${user.publicID}`);
-      if (raw) {
-        const stored = JSON.parse(raw) as { button?: unknown; window?: unknown };
-        if (isPoint(stored.button)) setButtonPoint(clampButtonPoint(stored.button));
-        if (isWindowBounds(stored.window)) setWindowBounds(clampWindowBounds(stored.window));
-      }
-      setNotificationsEnabled(
-        window.localStorage.getItem(`${NOTIFICATION_STORAGE_PREFIX}:${user.publicID}`) === "true",
-      );
-    } catch {
-      // Invalid local UI state falls back to the safe viewport defaults.
-    }
-    layoutHydratedRef.current = true;
+      setNotificationsEnabled(window.localStorage.getItem(`${NOTIFICATION_STORAGE_PREFIX}:${user?.publicID}`) === "true");
+    } catch { setNotificationsEnabled(false); }
   }, [user?.publicID]);
-
-  React.useEffect(() => {
-    if (!user?.publicID || !layoutHydratedRef.current) return;
-    const timer = window.setTimeout(() => {
-      window.localStorage.setItem(
-        `${LAYOUT_STORAGE_PREFIX}:${user.publicID}`,
-        JSON.stringify({ button: buttonPoint, window: windowBounds }),
-      );
-    }, 200);
-    return () => window.clearTimeout(timer);
-  }, [buttonPoint, user?.publicID, windowBounds]);
 
   React.useEffect(() => {
     if (!browserNotificationsAllowed) setNotificationsEnabled(false);
   }, [browserNotificationsAllowed]);
 
-  const loadConversations = React.useCallback(async () => {
-    if (!enabled) return undefined;
-    try {
-      const result = await listInternalMessagingConversations(accessToken);
-      setConversations(result.results);
-      setTotalUnread(result.totalUnread);
-      setUnreadByUser(
-        Object.fromEntries(
-          result.results
-            .filter((item) => item.unreadCount > 0)
-            .map((item) => [item.user.publicID, item.unreadCount]),
-        ),
-      );
-      return result;
-    } catch {
-      // Keep the last durable snapshot while the optional service reconnects.
-      return undefined;
-    }
-  }, [accessToken, enabled]);
+  const conversationList = useConversationList(accessToken, enabled, (result) => {
+    setConversations(result.results);
+    setTotalUnread(result.totalUnread);
+    setUnreadByUser(Object.fromEntries(result.results.map((item) => [item.user.publicID, item.unreadCount])));
+  });
+  const loadConversations = conversationList.refresh;
+
+  const composer = useMessageComposer(user?.publicID || "", selected?.publicID || "", accessToken,
+    (peerID, message) => {
+      messageCacheRef.current.delete(peerID);
+      if (selectedRef.current?.publicID === peerID) {
+        pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
+        setMessages((items) => mergeMessages(items, [message]));
+      }
+      void loadConversations();
+    });
+  const { draft, setDraft, replyTo, setReplyTo, editing, setEditing, send } = composer;
+  const sending = composer.outgoing.some((item) => item.status === "sending" && !item.file);
+  const uploading = composer.outgoing.some((item) => item.status === "sending" && item.file);
 
   const scheduleConversationRefresh = React.useCallback(() => {
     if (conversationRefreshTimerRef.current) return;
@@ -465,22 +315,12 @@ export function InternalMessagingWindowHost({
     }, 150);
   }, [loadConversations]);
 
-  const syncReadState = React.useCallback(
-    (recipientPublicID: string, throughMID: number, attempt = 0) => {
-      void markInternalMessagingRead(accessToken, recipientPublicID, throughMID)
-        .then(() => scheduleConversationRefresh())
-        .catch(() => {
-          const delays = [500, 1500];
-          if (attempt >= delays.length) return;
-          const timer = window.setTimeout(() => {
-            readRetryTimersRef.current.delete(timer);
-            syncReadState(recipientPublicID, throughMID, attempt + 1);
-          }, delays[attempt]);
-          readRetryTimersRef.current.add(timer);
-        });
-    },
-    [accessToken, scheduleConversationRefresh],
-  );
+  const acknowledgeVisibleMessages = useMessageReadState({
+    accessToken, open, enabled, peerID: selected?.publicID || "",
+    throughMID: messages.reduce((maximum, item) => Math.max(maximum, item.id), 0),
+    unreadCount: unreadByUser[selected?.publicID || ""] || 0,
+    nearBottom: nearMessageBottomRef, onRead: scheduleConversationRefresh,
+  });
 
   const loadUsers = React.useCallback(
     async (page = 1, append = false) => {
@@ -546,6 +386,7 @@ export function InternalMessagingWindowHost({
           }
         }
         const merged = before ? mergeMessages(next, previous) : next;
+        if (!before) reconnectHistoryRef.current = false;
         setMessages(merged);
         setHasMoreMessages(page.hasMore);
         setNextBefore(page.nextBefore);
@@ -554,13 +395,6 @@ export function InternalMessagingWindowHost({
           recipient.publicID,
           createCachedConversation(merged, page.hasMore, page.nextBefore),
         );
-        if (!before) {
-          const throughMID = next.reduce((maximum, item) => Math.max(maximum, item.id), 0);
-          // History is ready to render. Durable read-state reconciliation is
-          // intentionally background work so cross-origin development latency
-          // does not keep the message list behind a loading indicator.
-          syncReadState(recipient.publicID, throughMID);
-        }
       } catch {
         if (controller.signal.aborted || sequence !== messageRequestRef.current.sequence) return;
         if (before) setActionError(t("errors.olderHistory"));
@@ -573,7 +407,7 @@ export function InternalMessagingWindowHost({
         }
       }
     },
-    [accessToken, syncReadState, t],
+    [accessToken, t],
   );
 
   const prefetchMessages = React.useCallback(
@@ -602,11 +436,9 @@ export function InternalMessagingWindowHost({
   );
 
   React.useEffect(() => {
-    if (enabled) void loadConversations();
-  }, [enabled, loadConversations]);
-  React.useEffect(() => {
     if (!enabled) return;
-    const refresh = () => void loadConversations();
+    const refresh = () => { if (document.visibilityState === "visible") void loadConversations(); };
+    refresh();
     const timer = window.setInterval(refresh, 30_000);
     window.addEventListener("focus", refresh);
     return () => {
@@ -627,8 +459,6 @@ export function InternalMessagingWindowHost({
         window.clearTimeout(conversationRefreshTimerRef.current);
       }
       if (messageRefreshTimerRef.current) window.clearTimeout(messageRefreshTimerRef.current);
-      for (const timer of readRetryTimersRef.current) window.clearTimeout(timer);
-      readRetryTimersRef.current.clear();
     },
     [],
   );
@@ -674,7 +504,7 @@ export function InternalMessagingWindowHost({
         });
         if (decision.mergedAsTail) {
           if (nearMessageBottomRef.current) {
-            pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
+            pendingMessageScrollRef.current = { mode: "bottom", behavior: "auto" };
           } else if (incoming) {
             setNewMessagesBelow(true);
           }
@@ -687,9 +517,6 @@ export function InternalMessagingWindowHost({
               reaction,
             }).messages,
           );
-        }
-        if (incoming && decision.advanceReadCursor) {
-          syncReadState(peerPublicID, canonical.id);
         }
       } else if (incoming && !reaction) {
         setUnreadByUser((current) => ({
@@ -713,7 +540,8 @@ export function InternalMessagingWindowHost({
       return;
     }
 
-    if (!incoming || reaction || selectedConversation) return;
+    const readingConversation = selectedConversation && document.visibilityState === "visible" && document.hasFocus() && nearMessageBottomRef.current;
+    if (!incoming || reaction || readingConversation) return;
 
     const previousConversation = conversations.find(
       (item) => item.user.publicID === peerPublicID,
@@ -738,7 +566,24 @@ export function InternalMessagingWindowHost({
       });
     }
   }, (connected) => {
-    if (!connected) setPresenceReady(false);
+    setConnected(connected);
+    if (!connected) {
+      setPresenceReady(false);
+      return;
+    }
+    if (hasConnectedRef.current) {
+      scheduleConversationRefresh();
+      const recipient = selectedRef.current;
+      if (open && recipient) {
+        reconnectHistoryRef.current = true;
+        if (nearMessageBottomRef.current && document.visibilityState === "visible") {
+          void loadMessages(recipient);
+        } else {
+          setNewMessagesBelow(true);
+        }
+      }
+    }
+    hasConnectedRef.current = true;
   });
 
   const selectUser = (next: InternalMessagingUser) => {
@@ -764,16 +609,8 @@ export function InternalMessagingWindowHost({
     setMessageSearchOpen(false);
     setMessageSearchQuery("");
     setMessageSearchResults([]);
-    setReplyTo(null);
-    setEditing(null);
-    const cleared = unreadByUser[next.publicID] || 0;
-    setUnreadByUser((current) => {
-      if (!current[next.publicID]) return current;
-      const updated = { ...current };
-      delete updated[next.publicID];
-      return updated;
-    });
-    if (cleared) setTotalUnread((total) => Math.max(0, total - cleared));
+    setMessageFocusRequest(null);
+
   };
 
   const toggleNotifications = async () => {
@@ -838,50 +675,11 @@ export function InternalMessagingWindowHost({
     setOpen(false);
     setSelected(null);
     setMessageSearchOpen(false);
-    setReplyTo(null);
-    setEditing(null);
     setMessageError("");
     setActionError("");
     setNewMessagesBelow(false);
     nearMessageBottomRef.current = true;
     pendingMessageScrollRef.current = null;
-  };
-
-  const send = async () => {
-    if (!selected || !draft.trim() || sending) return;
-    const recipientPublicID = selected.publicID;
-    const content = draft.trim();
-    setSending(true);
-    setDraft("");
-    setActionError("");
-    try {
-      if (editing) {
-        const message = await editInternalMessagingMessage(accessToken, editing.id, content);
-        if (selectedRef.current?.publicID === recipientPublicID) {
-          setMessages((items) =>
-            mergeMessages(items.map((item) => (item.id === message.id ? message : item))),
-          );
-          setEditing(null);
-        }
-      } else {
-        const message = replyTo
-          ? await replyInternalMessagingMessage(accessToken, recipientPublicID, replyTo.id, content)
-          : await sendInternalMessagingMessage(accessToken, recipientPublicID, content);
-        if (selectedRef.current?.publicID === recipientPublicID) {
-          pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
-          setMessages((items) => mergeMessages(items, [message]));
-          setReplyTo(null);
-        }
-      }
-      void loadConversations();
-    } catch {
-      if (selectedRef.current?.publicID === recipientPublicID) {
-        setDraft(content);
-        setActionError(editing ? t("errors.edit") : t("errors.send"));
-      }
-    } finally {
-      setSending(false);
-    }
   };
 
   const chooseEdit = (message: InternalMessagingMessage) => {
@@ -920,7 +718,6 @@ export function InternalMessagingWindowHost({
 
   const uploadFile = async (file: File) => {
     if (!selected || uploading) return;
-    const recipientPublicID = selected.publicID;
     if (file.size > maxFileBytes) {
       setActionError(
         t("file.tooLarge", {
@@ -929,23 +726,8 @@ export function InternalMessagingWindowHost({
       );
       return;
     }
-    setUploading(true);
-    setActionError("");
-    try {
-      const message = await sendInternalMessagingFile(accessToken, recipientPublicID, file);
-      if (selectedRef.current?.publicID === recipientPublicID) {
-        pendingMessageScrollRef.current = { mode: "bottom", behavior: "smooth" };
-        setMessages((items) => mergeMessages(items, [message]));
-      }
-      void loadConversations();
-    } catch {
-      if (selectedRef.current?.publicID === recipientPublicID) {
-        setActionError(t("errors.fileSend"));
-      }
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    }
+    await composer.upload(file);
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const pasteFile = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
@@ -978,6 +760,7 @@ export function InternalMessagingWindowHost({
   };
 
   const focusSearchResult = async (result: InternalMessagingMessage) => {
+    nearMessageBottomRef.current = false;
     let merged = messages;
     if (!messages.some((item) => item.id === result.id) && selected) {
       const recipientPublicID = selected.publicID;
@@ -1002,150 +785,6 @@ export function InternalMessagingWindowHost({
     setMessageFocusRequest((current) => ({ id: result.id, sequence: (current?.sequence || 0) + 1 }));
   };
 
-  const startButtonDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (mobileLayout || event.button !== 0) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    buttonDragRef.current = {
-      pointerID: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      origin: { x: rect.left, y: rect.top },
-      moved: false,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const moveButton = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = buttonDragRef.current;
-    if (!drag || drag.pointerID !== event.pointerId) return;
-    const deltaX = event.clientX - drag.startX;
-    const deltaY = event.clientY - drag.startY;
-    if (Math.abs(deltaX) + Math.abs(deltaY) > 3) drag.moved = true;
-    setButtonPoint(clampButtonPoint({ x: drag.origin.x + deltaX, y: drag.origin.y + deltaY }));
-  };
-
-  const stopButtonDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const drag = buttonDragRef.current;
-    if (!drag || drag.pointerID !== event.pointerId) return;
-    suppressButtonClickRef.current = drag.moved;
-    buttonDragRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const openFromButton = () => {
-    if (suppressButtonClickRef.current) {
-      suppressButtonClickRef.current = false;
-      return;
-    }
-    setOpen(true);
-  };
-
-  const startWindowDrag = (event: React.PointerEvent<HTMLElement>) => {
-    if (
-      mobileLayout ||
-      event.button !== 0 ||
-      (event.target as HTMLElement).closest("button")
-    ) {
-      return;
-    }
-    windowDragRef.current = {
-      pointerID: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      origin: { x: windowBounds.x, y: windowBounds.y },
-      moved: false,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const moveWindow = (event: React.PointerEvent<HTMLElement>) => {
-    const drag = windowDragRef.current;
-    if (!drag || drag.pointerID !== event.pointerId) return;
-    setWindowBounds((current) =>
-      clampWindowBounds({
-        ...current,
-        x: drag.origin.x + event.clientX - drag.startX,
-        y: drag.origin.y + event.clientY - drag.startY,
-      }),
-    );
-  };
-
-  const stopWindowDrag = (event: React.PointerEvent<HTMLElement>) => {
-    const drag = windowDragRef.current;
-    if (!drag || drag.pointerID !== event.pointerId) return;
-    windowDragRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
-  const startResize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0) return;
-    const direction = event.currentTarget.dataset.direction as ResizeDirection;
-    resizeRef.current = {
-      pointerID: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      direction,
-      bounds: windowBounds,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  };
-
-  const resizeWindow = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const resize = resizeRef.current;
-    if (!resize || resize.pointerID !== event.pointerId) return;
-    const deltaX = event.clientX - resize.startX;
-    const deltaY = event.clientY - resize.startY;
-    const minimumWidth = Math.min(
-      MIN_WINDOW_WIDTH,
-      window.innerWidth - VIEWPORT_MARGIN * 2,
-    );
-    const minimumHeight = Math.min(
-      MIN_WINDOW_HEIGHT,
-      window.innerHeight - VIEWPORT_MARGIN * 2,
-    );
-    let left = resize.bounds.x;
-    let right = resize.bounds.x + resize.bounds.width;
-    let top = resize.bounds.y;
-    let bottom = resize.bounds.y + resize.bounds.height;
-
-    if (resize.direction.includes("e")) {
-      right = clamp(
-        right + deltaX,
-        left + minimumWidth,
-        window.innerWidth - VIEWPORT_MARGIN,
-      );
-    }
-    if (resize.direction.includes("w")) {
-      left = clamp(left + deltaX, VIEWPORT_MARGIN, right - minimumWidth);
-    }
-    if (resize.direction.includes("s")) {
-      bottom = clamp(
-        bottom + deltaY,
-        top + minimumHeight,
-        window.innerHeight - VIEWPORT_MARGIN,
-      );
-    }
-    if (resize.direction.includes("n")) {
-      top = clamp(top + deltaY, VIEWPORT_MARGIN, bottom - minimumHeight);
-    }
-
-    setWindowBounds({ x: left, y: top, width: right - left, height: bottom - top });
-  };
-
-  const stopResize = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const resize = resizeRef.current;
-    if (!resize || resize.pointerID !== event.pointerId) return;
-    resizeRef.current = null;
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-  };
-
   if (!enabled || !user) return null;
 
   return (
@@ -1159,7 +798,7 @@ export function InternalMessagingWindowHost({
           style={
             mobileLayout
               ? { width: "100%", height: "100dvh" }
-              : {
+              : expanded ? { left: "5vw", top: "5dvh", width: "90vw", height: "90dvh" } : {
                   left: windowBounds.x,
                   top: windowBounds.y,
                   width: windowBounds.width,
@@ -1174,7 +813,7 @@ export function InternalMessagingWindowHost({
                 ? "cursor-default touch-auto pt-[env(safe-area-inset-top)]"
                 : "h-14 cursor-move touch-none",
             )}
-            onPointerDown={startWindowDrag}
+            onPointerDown={expanded ? undefined : startWindowDrag}
             onPointerMove={moveWindow}
             onPointerUp={stopWindowDrag}
             onPointerCancel={stopWindowDrag}
@@ -1203,6 +842,7 @@ export function InternalMessagingWindowHost({
                   : t(mobileLayout ? "mobileHint" : "dragHint")}
               </p>
             </div>
+            {!mobileLayout ? <Button aria-label={t(expanded ? "aria.restore" : "aria.expand")} variant="ghost" size="icon-sm" onClick={() => setExpanded((value) => !value)}><Maximize2 /></Button> : null}
             {selected ? (
               <Button
                 aria-label={t("aria.search")}
@@ -1229,6 +869,7 @@ export function InternalMessagingWindowHost({
             </Button>
           </header>
 
+          {!connected ? <p role="status" className="border-b bg-muted px-3 py-2 text-xs">{t("connection.reconnecting")}</p> : null}
           {actionError ? (
             <div
               role="alert"
@@ -1331,11 +972,12 @@ export function InternalMessagingWindowHost({
                 {loadingMessages && messages.length === 0 ? (
                   <Loading />
                 ) : messages.length === 0 ? (
-                  <Empty label={messageError || t("messages.empty")} />
+                  composer.outgoing.length === 0 ? <Empty label={messageError || t("messages.empty")} /> : null
                 ) : (
                   <MessageRows
                     messages={messages}
                     viewportRef={messageViewportRef}
+                    followBottomRef={nearMessageBottomRef}
                     focusRequest={messageFocusRequest}
                   >
                     {(message) => {
@@ -1414,7 +1056,7 @@ export function InternalMessagingWindowHost({
                           {!message.deleted ? (
                             <span
                             className={cn(
-                                "absolute -top-3 hidden items-center rounded-full border bg-background text-foreground shadow-sm group-hover/message:flex max-sm:flex",
+                                "absolute -top-3 hidden items-center rounded-full border bg-background text-foreground shadow-sm group-hover/message:flex group-focus-within/message:flex max-sm:flex",
                                 mine ? "right-1" : "left-1",
                             )}
                           >
@@ -1444,6 +1086,18 @@ export function InternalMessagingWindowHost({
                     }}
                   </MessageRows>
                 )}
+                {composer.outgoing.map((item) => (
+                  <div key={item.id} className="ml-auto max-w-[85%] rounded-2xl bg-primary/10 px-3 py-2 text-sm">
+                    <p className="whitespace-pre-wrap break-words">{item.content}</p>
+                    <div className="mt-1 flex items-center gap-2 text-xs" role="status">
+                      <span>{t(item.status === "sending" ? "messages.sending" : "messages.failed")}</span>
+                      {item.status === "failed" ? <>
+                        <Button size="sm" variant="ghost" onClick={() => void composer.retry(item.id)}>{t("messages.retry")}</Button>
+                        <Button size="sm" variant="ghost" onClick={() => composer.discard(item.id)}>{t("messages.discard")}</Button>
+                      </> : null}
+                    </div>
+                  </div>
+                ))}
               </div>
               {newMessagesBelow ? (
                 <Button
@@ -1451,13 +1105,22 @@ export function InternalMessagingWindowHost({
                   size="sm"
                   variant="secondary"
                   className="absolute bottom-20 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-lg"
-                  onClick={() => scrollToMessageBottom("smooth")}
+                  onClick={() => {
+                    if (reconnectHistoryRef.current && selected) {
+                      nearMessageBottomRef.current = true;
+                      void loadMessages(selected);
+                    } else {
+                      scrollToMessageBottom("smooth");
+                      acknowledgeVisibleMessages();
+                    }
+                  }}
                 >
                   <ChevronDown className="size-3" />
                   {t("messages.newBelow")}
                 </Button>
               ) : null}
               <div className="border-t p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+                {[...draft.trim()].length > 4000 ? <p role="alert" className="text-xs text-destructive">{t("composer.tooLong")}</p> : null}
                 {replyTo || editing ? (
                   <div className="mb-2 flex items-center gap-2 rounded-md bg-muted px-2 py-1 text-xs">
                     {editing ? <Pencil className="size-3" /> : <CornerUpLeft className="size-3" />}
@@ -1536,18 +1199,19 @@ export function InternalMessagingWindowHost({
                     onChange={(event) => setDraft(event.target.value)}
                     onPaste={pasteFile}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
+                      if (shouldSendOnEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.nativeEvent.keyCode })) {
                         event.preventDefault();
                         void send();
                       }
                     }}
+                    aria-label={t("composer.placeholder")}
                     placeholder={t("composer.placeholder")}
                     className="max-h-28 min-h-10 resize-none text-base sm:text-sm"
                   />
                   <Button
                     aria-label={t("aria.send")}
                     size="icon"
-                    disabled={!draft.trim() || sending}
+                    disabled={!draft.trim() || [...draft.trim()].length > 4000}
                     onClick={() => void send()}
                   >
                     {sending ? <LoaderCircle className="animate-spin" /> : editing ? <Check /> : <Send />}
@@ -1598,13 +1262,14 @@ export function InternalMessagingWindowHost({
                 ) : null}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                {directoryView === "recent" && conversationList.failed ? <p role="alert" className="text-xs text-destructive">{t("errors.directory")}<Button variant="ghost" onClick={() => void loadConversations()}>{t("messages.retry")}</Button></p> : null}
                 {directoryView === "recent" ? (
-                  conversations.length === 0 ? (
+                  conversationList.loading && conversations.length === 0 ? <Loading /> : conversations.length === 0 ? (
                     <Empty label={t("directory.noRecent")} />
                   ) : (
                     conversations.map((conversation) => {
                       const item = conversation.user;
-                      const unread = unreadByUser[item.publicID] || conversation.unreadCount;
+                      const unread = unreadByUser[item.publicID] ?? conversation.unreadCount;
                       return (
                         <div
                           key={item.publicID}
@@ -1659,7 +1324,7 @@ export function InternalMessagingWindowHost({
                               ) : null}
                             </span>
                           </button>
-                          <span className="mr-1 hidden shrink-0 group-hover/conversation:flex max-sm:flex">
+                          <span className="mr-1 hidden shrink-0 group-hover/conversation:flex group-focus-within/conversation:flex max-sm:flex">
                             <button
                               type="button"
                               aria-label={
@@ -1767,11 +1432,12 @@ export function InternalMessagingWindowHost({
                     ) : null}
                   </>
                 )}
+                {directoryView === "recent" && conversationList.hasMore ? <Button variant="ghost" className="w-full" disabled={conversationList.loading} onClick={() => void loadConversations(true)}>{t(conversationList.loading ? "messages.loading" : "directory.loadMoreConversations")}</Button> : null}
               </div>
             </div>
           )}
 
-          {!mobileLayout
+          {!mobileLayout && !expanded
             ? RESIZE_HANDLES.map(({ direction, className }) => (
                 <button
                   aria-label={t("aria.resize", { direction })}
@@ -1842,11 +1508,13 @@ export function InternalMessagingWindowHost({
 function MessageRows({
   messages,
   viewportRef,
+  followBottomRef,
   focusRequest,
   children,
 }: {
   messages: InternalMessagingMessage[];
   viewportRef: React.RefObject<HTMLDivElement | null>;
+  followBottomRef: React.RefObject<boolean>;
   focusRequest: MessageFocusRequest | null;
   children: (message: InternalMessagingMessage) => React.ReactNode;
 }) {
@@ -1860,10 +1528,21 @@ function MessageRows({
     overscan: 12,
   });
 
+  const totalSize = virtualizer.getTotalSize();
   React.useLayoutEffect(() => {
-    if (!focusRequest) return;
+    // Estimated heights change again after rows mount. Follow those measurements
+    // while at the tail, including the transition into virtual rendering.
+    if (enabled && followBottomRef.current && messages.length) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end", behavior: "auto" });
+    }
+  }, [enabled, followBottomRef, focusRequest, messages.length, totalSize, virtualizer]);
+
+  const handledFocus = React.useRef<number | undefined>(undefined);
+  React.useLayoutEffect(() => {
+    if (!focusRequest || handledFocus.current === focusRequest.sequence) return;
     const index = messages.findIndex((message) => message.id === focusRequest.id);
     if (index < 0) return;
+    handledFocus.current = focusRequest.sequence;
     if (enabled) {
       virtualizer.scrollToIndex(index, { align: "center", behavior: "smooth" });
       return;
@@ -1879,7 +1558,7 @@ function MessageRows({
   }
 
   return (
-    <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+    <div className="relative w-full" style={{ height: totalSize }}>
       {virtualizer.getVirtualItems().map((virtualRow) => {
         const message = messages[virtualRow.index];
         if (!message) return null;

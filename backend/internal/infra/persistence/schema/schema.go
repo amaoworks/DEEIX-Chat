@@ -77,6 +77,7 @@ func Models() []any {
 		&model.InternalMessagingBinding{},
 		&model.InternalMessagingMessage{},
 		&model.InternalMessagingConversation{},
+		&model.InternalMessagingIndexRepair{},
 	}
 }
 

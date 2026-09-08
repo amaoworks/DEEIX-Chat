@@ -30,7 +30,8 @@ type InternalMessagingMessage struct {
 	ReplyToMID      int64     `gorm:"column:reply_to_mid;not null;default:0;index:idx_internal_messaging_messages_reply"`
 	SentAt          time.Time `gorm:"not null;index:idx_internal_messaging_messages_sent_at"`
 	EditedAt        time.Time
-	MessageDeleted  bool `gorm:"not null;default:false;index:idx_internal_messaging_messages_deleted"`
+	LastEventMID    int64 `gorm:"column:last_event_mid;not null;default:0"`
+	MessageDeleted  bool  `gorm:"not null;default:false;index:idx_internal_messaging_messages_deleted"`
 }
 
 func (InternalMessagingMessage) TableName() string { return "internal_messaging_messages" }
@@ -53,3 +54,16 @@ type InternalMessagingConversation struct {
 func (InternalMessagingConversation) TableName() string {
 	return "internal_messaging_conversations"
 }
+
+// Hard-deleted once repaired; no message delivery is ever replayed from here.
+type InternalMessagingIndexRepair struct {
+	ID         uint      `gorm:"primaryKey"`
+	ActorID    uint      `gorm:"not null"`
+	PeerID     uint      `gorm:"not null"`
+	AfterMID   int64     `gorm:"column:after_mid;not null;default:0"`
+	BeforeMID  int64     `gorm:"column:before_mid;not null;default:0"`
+	EventsJSON string    `gorm:"type:text;not null;default:'[]'"`
+	ReadyAt    time.Time `gorm:"not null;index"`
+}
+
+func (InternalMessagingIndexRepair) TableName() string { return "internal_messaging_index_repairs" }

@@ -20,10 +20,10 @@ export function listInternalMessagingUsers(accessToken: string, query = "", page
   return authedRequest<InternalMessagingUserPage>(`${ROOT}/users?${params}`, { accessToken });
 }
 
-export function listInternalMessagingConversations(accessToken: string, page = 1) {
+export function listInternalMessagingConversations(accessToken: string, page = 1, signal?: AbortSignal) {
   const params = new URLSearchParams({ page: String(page), page_size: "50" });
   return authedRequest<InternalMessagingConversationPage>(`${ROOT}/conversations?${params}`, {
-    accessToken,
+    accessToken, signal,
   });
 }
 

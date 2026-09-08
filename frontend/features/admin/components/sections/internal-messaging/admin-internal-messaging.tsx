@@ -134,6 +134,8 @@ export function AdminInternalMessagingPage() {
           <Metric label={t("latency")} value={`${status?.averageLatencyMS ?? 0} ms`} />
           <Metric label={t("requests")} value={status?.voceRequests ?? 0} />
           <Metric label={t("failures")} value={status?.voceFailures ?? 0} />
+          <Metric label={t("indexFailures")} value={status?.indexFailures ?? 0} />
+          <Metric label={t("pendingIndexRepairs")} value={status?.pendingIndexRepairs ?? 0} />
           <Metric label={t("messages")} value={status?.indexedMessages ?? 0} />
           <Metric label={t("files")} value={formatBytes(status?.fileBytes ?? 0)} />
         </CardContent>

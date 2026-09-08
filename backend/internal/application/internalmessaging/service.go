@@ -1,9 +1,12 @@
 package internalmessaging
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -63,6 +66,7 @@ type conversationStore interface {
 	FindMessages(context.Context, uint, []int64) ([]domainmessaging.MessageIndex, error)
 	EditMessage(context.Context, uint, int64, string, string, string) error
 	DeleteMessage(context.Context, uint, int64) error
+	ApplyReaction(context.Context, uint, int64, int64, string, string, string, bool) error
 }
 
 type voceClient interface {
@@ -73,7 +77,7 @@ type voceClient interface {
 	Reply(context.Context, string, int64, string) (int64, error)
 	Edit(context.Context, string, int64, string) (int64, error)
 	Delete(context.Context, string, int64) (int64, error)
-	UploadFile(context.Context, string, string, string, []byte) (vocechat.UploadedFile, error)
+	UploadFileStream(context.Context, string, string, string, io.Reader, int64) (vocechat.UploadedFile, error)
 	SendFile(context.Context, string, int64, string) (int64, error)
 	DownloadFile(context.Context, string, string, bool) (*http.Response, error)
 	UpdateName(context.Context, string, string) error
@@ -81,18 +85,22 @@ type voceClient interface {
 }
 
 type Service struct {
-	configured     bool
-	users          userStore
-	bindings       bindingStore
-	conversations  conversationStore
-	voce           voceClient
-	loginLock      sync.Map // map[uint]*sync.Mutex; prevents login/provisioning stampedes
-	loginCache     sync.Map // map[uint]cachedVoceLogin; server-memory only
-	policyProvider func() Policy
-	activeSSE      atomic.Int64
-	voceRequests   atomic.Int64
-	voceFailures   atomic.Int64
-	voceLatencyNS  atomic.Int64
+	eventWork       singleflight.Group
+	eventMu         sync.Mutex
+	processedEvents map[int64]processedEvent
+	configured      bool
+	users           userStore
+	bindings        bindingStore
+	conversations   conversationStore
+	voce            voceClient
+	loginLock       sync.Map // map[uint]*sync.Mutex; prevents login/provisioning stampedes
+	loginCache      sync.Map // map[uint]cachedVoceLogin; server-memory only
+	policyProvider  func() Policy
+	activeSSE       atomic.Int64
+	voceRequests    atomic.Int64
+	voceFailures    atomic.Int64
+	voceLatencyNS   atomic.Int64
+	indexFailures   atomic.Int64
 }
 
 type cachedVoceLogin struct {
@@ -109,16 +117,18 @@ type Policy struct {
 }
 
 type RuntimeStats struct {
-	Configured       bool
-	Enabled          bool
-	Healthy          bool
-	ActiveSSE        int64
-	VoceRequests     int64
-	VoceFailures     int64
-	AverageLatencyMS int64
-	IndexedMessages  int64
-	FileBytes        int64
-	Policy           Policy
+	Configured          bool
+	Enabled             bool
+	Healthy             bool
+	ActiveSSE           int64
+	VoceRequests        int64
+	VoceFailures        int64
+	AverageLatencyMS    int64
+	IndexFailures       int64
+	PendingIndexRepairs int64
+	IndexedMessages     int64
+	FileBytes           int64
+	Policy              Policy
 }
 
 type DirectoryUser struct{ PublicID, Username, DisplayName, AvatarURL string }
@@ -197,16 +207,10 @@ func (s *Service) policy() Policy {
 }
 func (s *Service) Enabled() bool { return s.configured && s.policy().Enabled && s.voce != nil }
 
-// Available performs a bounded private-network readiness check for UI entry
-// decisions. Failed checks do not affect any other DEEIX feature.
+// Available reports access to the feature, independently of upstream health.
+// A temporary outage must not close the window or discard its selected peer.
 func (s *Service) Available(ctx context.Context, actorID uint) bool {
 	if !s.Enabled() {
-		return false
-	}
-	started := time.Now()
-	healthy := s.voce.Healthy(ctx)
-	s.observeVoce(started, healthy)
-	if !healthy {
 		return false
 	}
 	actor, err := s.users.GetByID(ctx, actorID)
@@ -300,7 +304,9 @@ func (s *Service) History(ctx context.Context, actorID uint, recipientPublicID s
 		}
 		cursor = nextCursor
 	}
-	s.recordVoceMessages(ctx, messages, *actor, *target, actorLogin.User.UID)
+	if indexErr := s.recordVoceMessages(ctx, messages, *actor, *target, actorLogin.User.UID); indexErr != nil {
+		s.observeIndexError(indexErr)
+	}
 	results := s.toMessages(ctx, actor.ID, messages, actorLogin.User.UID, targetLogin.User.UID, actor.PublicID, target.PublicID)
 	sort.Slice(results, func(first, second int) bool { return results[first].ID < results[second].ID })
 	hasMore := len(results) > historyPageSize || (!exhausted && lastPageFull)
@@ -320,6 +326,8 @@ func (s *Service) History(ctx context.Context, actorID uint, recipientPublicID s
 }
 
 func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, content string) (ChatMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	content = strings.TrimSpace(content)
 	if content == "" || len([]rune(content)) > 4000 {
 		return ChatMessage{}, fmt.Errorf("message must contain 1 to 4000 characters")
@@ -327,6 +335,10 @@ func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, con
 	actor, target, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
 	if err != nil {
 		return ChatMessage{}, err
+	}
+	repairID, repairErr := s.beginIndexRepair(ctx, actor.ID, target.ID)
+	if repairErr != nil {
+		return ChatMessage{}, repairErr
 	}
 	started := time.Now()
 	mid, err := s.voce.Send(ctx, actorLogin.Token, targetLogin.User.UID, content)
@@ -336,14 +348,17 @@ func (s *Service) Send(ctx context.Context, actorID uint, recipientPublicID, con
 		return ChatMessage{}, err
 	}
 	sentAt := time.Now().UTC()
-	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+	indexErr := s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
 		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
 		ContentType: "text/plain", Content: content, SentAt: sentAt,
 	})
+	s.finishIndexRepair(ctx, repairID, indexErr)
 	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "text/plain", Content: content, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
 }
 
 func (s *Service) Reply(ctx context.Context, actorID uint, recipientPublicID string, replyToMID int64, content string) (ChatMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	content = strings.TrimSpace(content)
 	if content == "" || len([]rune(content)) > 4000 || replyToMID <= 0 {
 		return ChatMessage{}, fmt.Errorf("reply must contain 1 to 4000 characters")
@@ -355,6 +370,10 @@ func (s *Service) Reply(ctx context.Context, actorID uint, recipientPublicID str
 	if err = s.requireConversationMessage(ctx, actor.ID, target.ID, replyToMID, false); err != nil {
 		return ChatMessage{}, err
 	}
+	repairID, repairErr := s.beginIndexRepair(ctx, actor.ID, target.ID)
+	if repairErr != nil {
+		return ChatMessage{}, repairErr
+	}
 	started := time.Now()
 	mid, err := s.voce.Reply(ctx, actorLogin.Token, replyToMID, content)
 	s.observeVoce(started, err == nil)
@@ -363,14 +382,17 @@ func (s *Service) Reply(ctx context.Context, actorID uint, recipientPublicID str
 		return ChatMessage{}, err
 	}
 	sentAt := time.Now().UTC()
-	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+	indexErr := s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
 		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
 		ContentType: "text/plain", Content: content, ReplyToMID: replyToMID, SentAt: sentAt,
 	})
+	s.finishIndexRepair(ctx, repairID, indexErr)
 	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "text/plain", Content: content, ReplyToID: replyToMID, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
 }
 
 func (s *Service) Edit(ctx context.Context, actorID uint, mid int64, content string) (ChatMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	content = strings.TrimSpace(content)
 	if content == "" || len([]rune(content)) > 4000 || mid <= 0 {
 		return ChatMessage{}, fmt.Errorf("message must contain 1 to 4000 characters")
@@ -382,22 +404,27 @@ func (s *Service) Edit(ctx context.Context, actorID uint, mid int64, content str
 	if item.Deleted || (item.ContentType != "text/plain" && item.ContentType != "text/markdown") {
 		return ChatMessage{}, ErrMessageUnavailable
 	}
+	repairID, repairErr := s.beginIndexRepair(ctx, actor.ID, item.RecipientUserID)
+	if repairErr != nil {
+		return ChatMessage{}, repairErr
+	}
 	started := time.Now()
-	_, err = s.voce.Edit(ctx, login.Token, mid, content)
+	reactionMID, err := s.voce.Edit(ctx, login.Token, mid, content)
 	s.observeVoce(started, err == nil)
 	if err != nil {
 		s.loginCache.Delete(actor.ID)
 		return ChatMessage{}, err
 	}
-	if err = s.conversations.EditMessage(ctx, actor.ID, mid, item.ContentType, content, item.MetadataJSON); err != nil {
-		return ChatMessage{}, err
-	}
+	indexErr := s.conversations.ApplyReaction(ctx, actor.ID, mid, reactionMID, item.ContentType, content, item.MetadataJSON, false)
+	s.finishIndexRepair(ctx, repairID, indexErr)
 	item.Content = content
 	item.EditedAt = time.Now().UTC()
 	return indexedToChatMessage(*item, actor.PublicID), nil
 }
 
 func (s *Service) Delete(ctx context.Context, actorID uint, mid int64) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	item, actor, login, err := s.ownedMessage(ctx, actorID, mid)
 	if err != nil {
 		return err
@@ -405,22 +432,34 @@ func (s *Service) Delete(ctx context.Context, actorID uint, mid int64) error {
 	if item.Deleted {
 		return nil
 	}
+	repairID, repairErr := s.beginIndexRepair(ctx, actor.ID, item.RecipientUserID)
+	if repairErr != nil {
+		return repairErr
+	}
 	started := time.Now()
-	_, err = s.voce.Delete(ctx, login.Token, mid)
+	reactionMID, err := s.voce.Delete(ctx, login.Token, mid)
 	s.observeVoce(started, err == nil)
 	if err != nil {
 		s.loginCache.Delete(actor.ID)
 		return err
 	}
-	return s.conversations.DeleteMessage(ctx, actor.ID, mid)
+	indexErr := s.conversations.ApplyReaction(ctx, actor.ID, mid, reactionMID, item.ContentType, "", "{}", true)
+	s.finishIndexRepair(ctx, repairID, indexErr)
+	return nil
 }
 
 func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID, filename, contentType string, content []byte) (ChatMessage, error) {
+	return s.SendFileStream(ctx, actorID, recipientPublicID, filename, contentType, bytes.NewReader(content), int64(len(content)))
+}
+
+func (s *Service) SendFileStream(ctx context.Context, actorID uint, recipientPublicID, filename, contentType string, content io.Reader, size int64) (ChatMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 	policy := s.policy()
-	if len(content) == 0 {
+	if size <= 0 {
 		return ChatMessage{}, fmt.Errorf("file is empty")
 	}
-	if int64(len(content)) > policy.MaxFileBytes {
+	if size > policy.MaxFileBytes {
 		return ChatMessage{}, ErrFileTooLarge
 	}
 	filename = safeFilename(filename)
@@ -428,7 +467,13 @@ func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID,
 		filename = "file"
 	}
 	if contentType == "" || contentType == "application/octet-stream" {
-		contentType = http.DetectContentType(content)
+		buffered := bufio.NewReader(content)
+		prefix, readErr := buffered.Peek(int(min(size, 512)))
+		if readErr != nil && readErr != io.EOF {
+			return ChatMessage{}, readErr
+		}
+		contentType = http.DetectContentType(prefix)
+		content = buffered
 	}
 	actor, target, actorLogin, targetLogin, err := s.resolveChat(ctx, actorID, recipientPublicID)
 	if err != nil {
@@ -439,12 +484,16 @@ func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID,
 		if quotaErr != nil {
 			return ChatMessage{}, quotaErr
 		}
-		if used+int64(len(content)) > policy.UserQuotaBytes {
+		if used+size > policy.UserQuotaBytes {
 			return ChatMessage{}, ErrQuotaExceeded
 		}
 	}
+	repairID, repairErr := s.beginIndexRepair(ctx, actor.ID, target.ID)
+	if repairErr != nil {
+		return ChatMessage{}, repairErr
+	}
 	started := time.Now()
-	uploaded, err := s.voce.UploadFile(ctx, actorLogin.Token, filename, contentType, content)
+	uploaded, err := s.voce.UploadFileStream(ctx, actorLogin.Token, filename, contentType, io.LimitReader(content, size), size)
 	s.observeVoce(started, err == nil)
 	if err != nil {
 		s.loginCache.Delete(actor.ID)
@@ -463,10 +512,11 @@ func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID,
 	}
 	metadata, _ := json.Marshal(indexedFileMetadata{ChatFile: file, Path: uploaded.Path})
 	sentAt := time.Now().UTC()
-	s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
+	indexErr := s.recordIndexedMessage(ctx, domainmessaging.MessageIndex{
 		MID: mid, SenderUserID: actor.ID, RecipientUserID: target.ID,
 		ContentType: "vocechat/file", Content: uploaded.Path, MetadataJSON: string(metadata), FileSize: uploaded.Size, SentAt: sentAt,
 	})
+	s.finishIndexRepair(ctx, repairID, indexErr)
 	return ChatMessage{ID: mid, FromUserPublicID: actor.PublicID, ContentType: "vocechat/file", Content: "", File: &file, CreatedAt: sentAt.Format(time.RFC3339Nano)}, nil
 }
 
@@ -563,10 +613,13 @@ func (s *Service) Stats(ctx context.Context) RuntimeStats {
 	stats := RuntimeStats{
 		Configured: s.configured, Enabled: s.Enabled(), Healthy: healthy,
 		ActiveSSE: s.activeSSE.Load(), VoceRequests: requests,
-		VoceFailures: s.voceFailures.Load(), AverageLatencyMS: latencyMS, Policy: policy,
+		VoceFailures: s.voceFailures.Load(), IndexFailures: s.indexFailures.Load(), AverageLatencyMS: latencyMS, Policy: policy,
 	}
 	if s.conversations != nil {
 		stats.IndexedMessages, stats.FileBytes, _ = s.conversations.MessageStats(ctx)
+	}
+	if store, ok := s.conversations.(indexRepairStore); ok {
+		stats.PendingIndexRepairs, _ = store.PendingIndexRepairs(ctx)
 	}
 	return stats
 }
@@ -575,6 +628,19 @@ func (s *Service) StartBackgroundWorkers(ctx context.Context) {
 	if s == nil || s.conversations == nil || s.voce == nil {
 		return
 	}
+	go func() {
+		s.repairIndexes(ctx)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.repairIndexes(ctx)
+			}
+		}
+	}()
 	go func() {
 		s.cleanupExpired(ctx)
 		ticker := time.NewTicker(6 * time.Hour)
@@ -677,10 +743,24 @@ func (s *Service) ListConversations(ctx context.Context, actorID uint, page, pag
 	if err != nil {
 		return ConversationPage{}, err
 	}
+	peerIDs := make([]uint, 0, len(states))
+	for _, state := range states {
+		peerIDs = append(peerIDs, state.PeerUserID)
+	}
+	peers := make(map[uint]domainuser.User, len(states))
+	if len(peerIDs) > 0 {
+		items, _, usersErr := s.users.ListUsers(ctx, 0, len(peerIDs), repository.UserListFilter{IDs: peerIDs, Status: domainuser.StatusActive})
+		if usersErr != nil {
+			return ConversationPage{}, usersErr
+		}
+		for _, peer := range items {
+			peers[peer.ID] = peer
+		}
+	}
 	results := make([]Conversation, 0, len(states))
 	for _, state := range states {
-		peer, peerErr := s.users.GetByID(ctx, state.PeerUserID)
-		if peerErr != nil || peer == nil || !available(*peer) {
+		peer, exists := peers[state.PeerUserID]
+		if !exists || !available(peer) {
 			continue
 		}
 		lastAt := ""
@@ -688,7 +768,7 @@ func (s *Service) ListConversations(ctx context.Context, actorID uint, page, pag
 			lastAt = state.LastMessageAt.UTC().Format(time.RFC3339Nano)
 		}
 		results = append(results, Conversation{
-			User: toDirectoryUser(*peer), LastMessageID: state.LastMessageMID,
+			User: toDirectoryUser(peer), LastMessageID: state.LastMessageMID,
 			LastMessagePreview: state.LastMessagePreview, LastMessageAt: lastAt,
 			UnreadCount: state.UnreadCount, Pinned: state.Pinned, Muted: state.Muted,
 		})
@@ -767,7 +847,7 @@ func (s *Service) SearchMessages(ctx context.Context, actorID uint, recipientPub
 
 // ProcessEvent records product state from a VoceChat chat event and returns
 // the sender's opaque DEEIX public ID for the browser event envelope.
-func (s *Service) ProcessEvent(ctx context.Context, raw string) (string, error) {
+func (s *Service) processEvent(ctx context.Context, raw string) (string, error) {
 	var header struct {
 		Type string `json:"type"`
 	}
@@ -794,11 +874,10 @@ func (s *Service) ProcessEvent(ctx context.Context, raw string) (string, error) 
 	if err != nil || recipient == nil || !available(*recipient) {
 		return "", ErrRecipientUnavailable
 	}
-	if message.Detail.Type == "reaction" {
-		s.recordVoceMessage(ctx, message, *sender, *recipient, message.FromUID)
-		return sender.PublicID, nil
+	if err := s.recordVoceMessage(ctx, message, *sender, *recipient, message.FromUID); err != nil {
+		s.observeIndexError(err)
+		return "", err
 	}
-	s.recordVoceMessage(ctx, message, *sender, *recipient, message.FromUID)
 	return sender.PublicID, nil
 }
 
@@ -1084,6 +1163,9 @@ func (s *Service) toMessages(ctx context.Context, actorID uint, items []vocechat
 		if item.Detail.Type != "reaction" || item.Detail.MID <= 0 {
 			continue
 		}
+		if indexed, exists := indexedByMID[item.Detail.MID]; exists && (indexed.Deleted || indexed.LastEventMID >= item.MID) {
+			continue
+		}
 		original, ok := byMID[item.Detail.MID]
 		if !ok {
 			continue
@@ -1109,37 +1191,36 @@ func (s *Service) toMessages(ctx context.Context, actorID uint, items []vocechat
 	return results
 }
 
-func (s *Service) recordVoceMessage(ctx context.Context, item vocechat.Message, first, second domainuser.User, firstVoceUID int64) {
+func (s *Service) recordVoceMessage(ctx context.Context, item vocechat.Message, first, second domainuser.User, firstVoceUID int64) error {
+	if s.conversations == nil {
+		return nil
+	}
 	sender, recipient := first, second
 	if item.FromUID != firstVoceUID {
 		sender, recipient = second, first
 	}
 	if item.Detail.Type == "reaction" {
-		if s.conversations != nil && item.Detail.MID > 0 {
-			switch item.Detail.Reaction.Type {
-			case "edit":
-				contentType := item.Detail.Reaction.ContentType
-				if contentType == "" {
-					contentType = "text/plain"
-				}
-				metadata, _ := json.Marshal(item.Detail.Reaction.Properties)
-				_ = s.conversations.EditMessage(ctx, sender.ID, item.Detail.MID, contentType, item.Detail.Reaction.Content, string(metadata))
-			case "delete":
-				_ = s.conversations.DeleteMessage(ctx, sender.ID, item.Detail.MID)
-			}
+		contentType := item.Detail.Reaction.ContentType
+		if contentType == "" {
+			contentType = "text/plain"
 		}
-		return
+		metadata, _ := json.Marshal(item.Detail.Reaction.Properties)
+		switch item.Detail.Reaction.Type {
+		case "edit", "delete":
+			return s.conversations.ApplyReaction(ctx, sender.ID, item.Detail.MID, item.MID, contentType, item.Detail.Reaction.Content, string(metadata), item.Detail.Reaction.Type == "delete")
+		}
+		return nil
 	}
 	indexed, ok := voceMessageIndex(item, sender, recipient)
 	if !ok {
-		return
+		return nil
 	}
-	s.recordIndexedMessage(ctx, indexed)
+	return s.recordIndexedMessage(ctx, indexed)
 }
 
-func (s *Service) recordVoceMessages(ctx context.Context, items []vocechat.Message, first, second domainuser.User, firstVoceUID int64) {
+func (s *Service) recordVoceMessages(ctx context.Context, items []vocechat.Message, first, second domainuser.User, firstVoceUID int64) error {
 	if s.conversations == nil {
-		return
+		return nil
 	}
 	indexed := make([]domainmessaging.MessageIndex, 0, len(items))
 	for _, item := range items {
@@ -1151,15 +1232,19 @@ func (s *Service) recordVoceMessages(ctx context.Context, items []vocechat.Messa
 			indexed = append(indexed, message)
 		}
 	}
-	_ = s.conversations.RecordMessages(ctx, indexed)
-
-	// Apply reactions only after every normal message in the page is indexed,
-	// regardless of the ordering returned by VoceChat history.
-	for _, item := range items {
+	if err := s.conversations.RecordMessages(ctx, indexed); err != nil {
+		return err
+	}
+	ordered := append([]vocechat.Message(nil), items...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].MID < ordered[j].MID })
+	for _, item := range ordered {
 		if item.Detail.Type == "reaction" {
-			s.recordVoceMessage(ctx, item, first, second, firstVoceUID)
+			if err := s.recordVoceMessage(ctx, item, first, second, firstVoceUID); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func voceMessageIndex(item vocechat.Message, sender, recipient domainuser.User) (domainmessaging.MessageIndex, bool) {
@@ -1191,11 +1276,12 @@ func voceMessageIndex(item vocechat.Message, sender, recipient domainuser.User) 
 	}, true
 }
 
-func (s *Service) recordIndexedMessage(ctx context.Context, item domainmessaging.MessageIndex) {
+func (s *Service) recordIndexedMessage(ctx context.Context, item domainmessaging.MessageIndex) error {
 	if s.conversations == nil || item.MID <= 0 || item.SenderUserID == 0 || item.RecipientUserID == 0 {
-		return
+		return nil
 	}
-	_, _ = s.conversations.RecordMessage(ctx, item)
+	_, err := s.conversations.RecordMessage(ctx, item)
+	return err
 }
 
 func indexedToChatMessage(item domainmessaging.MessageIndex, senderPublicID string) ChatMessage {

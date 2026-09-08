@@ -315,6 +315,10 @@ func (r *Repo) ListUsers(ctx context.Context, offset int, limit int, filter repo
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&model.User{})
+	if filter.IDs != nil {
+		query = query.Where("id IN ?", filter.IDs)
+	}
+
 	if keyword := strings.TrimSpace(filter.Query); keyword != "" {
 		like := "%" + userListSearchEscaper.Replace(strings.ToLower(keyword)) + "%"
 		query = query.Where(

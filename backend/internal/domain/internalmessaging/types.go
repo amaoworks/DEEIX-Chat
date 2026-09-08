@@ -28,6 +28,7 @@ type MessageIndex struct {
 	ReplyToMID      int64
 	SentAt          time.Time
 	EditedAt        time.Time
+	LastEventMID    int64
 	Deleted         bool
 }
 
@@ -43,4 +44,16 @@ type ConversationState struct {
 	ReadThroughMID     int64
 	Pinned             bool
 	Muted              bool
+}
+
+// IndexRepair is written before a remote mutation. If local indexing fails or
+// the process exits, history after AfterMID can rebuild the missing index.
+type IndexRepair struct {
+	ID         uint
+	ActorID    uint
+	PeerID     uint
+	AfterMID   int64
+	BeforeMID  int64
+	EventsJSON string
+	ReadyAt    time.Time
 }

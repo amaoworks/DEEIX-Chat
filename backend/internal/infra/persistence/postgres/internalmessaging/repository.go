@@ -372,6 +372,6 @@ func toMessageIndex(item model.InternalMessagingMessage) domainmessaging.Message
 		MID: item.MID, SenderUserID: item.SenderUserID, RecipientUserID: item.RecipientUserID,
 		ContentType: item.ContentType, Content: item.Content, MetadataJSON: item.MetadataJSON,
 		FileSize:   item.FileSize,
-		ReplyToMID: item.ReplyToMID, SentAt: item.SentAt, EditedAt: item.EditedAt, Deleted: item.MessageDeleted,
+		ReplyToMID: item.ReplyToMID, SentAt: item.SentAt, EditedAt: item.EditedAt, LastEventMID: item.LastEventMID, Deleted: item.MessageDeleted,
 	}
 }

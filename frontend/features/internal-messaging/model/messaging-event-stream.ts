@@ -12,6 +12,8 @@ type MessagingEventStreamOptions<Event extends MessagingEventWithMID> = {
   onEvent: (event: Event) => void;
   onConnectionChange?: (connected: boolean) => void;
   retryDelayMS?: number;
+  maxRetryDelayMS?: number;
+  idleTimeoutMS?: number;
 };
 
 export function createJSONEventStreamParser<Event>(onEvent: (event: Event) => void) {
@@ -47,26 +49,46 @@ export function createJSONEventStreamParser<Event>(onEvent: (event: Event) => vo
   };
 }
 
+export function messagingRetryDelay(attempt: number, base = 1500, maximum = 30_000, random = Math.random()) {
+  const ceiling = Math.min(maximum, base * 2 ** Math.min(attempt, 10));
+  return Math.round(ceiling * (0.5 + random * 0.5));
+}
+
 export function startMessagingEventStream<Event extends MessagingEventWithMID>({
   openStream,
   onEvent,
   onConnectionChange,
   retryDelayMS = 1500,
+  maxRetryDelayMS = 30_000,
+  idleTimeoutMS = 60_000,
 }: MessagingEventStreamOptions<Event>) {
   let stopped = false;
   let controller: AbortController | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let latestMID = 0;
+  let failures = 0;
 
   const connect = async () => {
+    if (stopped) return;
     controller = new AbortController();
+    const connection = controller;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let connectedAt = 0;
+    const watch = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => connection.abort(), idleTimeoutMS);
+    };
+    watch();
     try {
       const response = await openStream(
         latestMID || undefined,
         controller.signal,
       );
-      const reader = response.body?.getReader();
+      reader = response.body?.getReader();
       if (!reader) throw new Error("event stream is unavailable");
+      if (stopped) { await reader.cancel(); return; }
+      connectedAt = Date.now();
       onConnectionChange?.(true);
       const decoder = new TextDecoder();
       const parser = createJSONEventStreamParser<Event>((event) => {
@@ -78,15 +100,20 @@ export function startMessagingEventStream<Event extends MessagingEventWithMID>({
       while (!stopped) {
         const next = await reader.read();
         if (next.done) break;
+        watch();
         parser.push(decoder.decode(next.value, { stream: true }));
       }
       parser.push(decoder.decode());
       parser.finish();
     } catch {
       // A bounded retry below covers service startup and transient disconnects.
+    } finally {
+      clearTimeout(idleTimer);
+      reader?.releaseLock();
     }
     onConnectionChange?.(false);
-    if (!stopped) retryTimer = setTimeout(connect, retryDelayMS);
+    if (connectedAt && Date.now() - connectedAt >= 30_000) failures = 0;
+    if (!stopped) retryTimer = setTimeout(connect, messagingRetryDelay(failures++, retryDelayMS, maxRetryDelayMS));
   };
 
   void connect();

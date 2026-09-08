@@ -19,7 +19,7 @@ func newTestRepo(t *testing.T) *Repo {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+	if err := db.AutoMigrate(&model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}, &model.InternalMessagingIndexRepair{}); err != nil {
 		t.Fatal(err)
 	}
 	return NewRepo(db)

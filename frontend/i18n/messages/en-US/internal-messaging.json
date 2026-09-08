@@ -20,7 +20,9 @@
     "mute": "Mute conversation",
     "unmute": "Unmute conversation",
     "imagePreview": "Image preview",
-    "closePreview": "Close image preview"
+    "closePreview": "Close image preview",
+    "expand": "Expand messaging window",
+    "restore": "Restore messaging window"
   },
   "errors": {
     "windowLoad": "The messaging window could not be loaded.",
@@ -64,14 +66,19 @@
     "reply": "Reply",
     "edit": "Edit",
     "delete": "Recall",
-    "confirmDelete": "Recall this message?"
+    "confirmDelete": "Recall this message?",
+    "sending": "Sending…",
+    "failed": "Delivery unconfirmed. Check the conversation before retrying.",
+    "retry": "Retry",
+    "discard": "Dismiss"
   },
   "composer": {
     "editing": "Edit message",
     "replying": "Reply: {content}",
     "file": "File",
     "placeholder": "Type a message…",
-    "dropFile": "Drop to send this file"
+    "dropFile": "Drop to send this file",
+    "tooLong": "Messages cannot exceed 4,000 characters."
   },
   "directory": {
     "recent": "Recent",
@@ -80,10 +87,14 @@
     "noRecent": "No recent conversations. Start one from All users.",
     "start": "Start a conversation",
     "noUsers": "No users are available to chat.",
-    "loadMore": "Load more users"
+    "loadMore": "Load more users",
+    "loadMoreConversations": "Load more conversations"
   },
   "file": {
     "tooLarge": "Files must be no larger than {size}.",
     "unknownSize": "Unknown size"
+  },
+  "connection": {
+    "reconnecting": "Connecting to messaging. Messages may be delayed…"
   }
 }

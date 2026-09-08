@@ -115,7 +115,7 @@ export function InternalMessagingHost() {
     try {
       setStatus(await getInternalMessagingStatus(accessToken));
     } catch {
-      setStatus((current) => current && { ...current, enabled: false });
+      // Keep the last configuration while the connection indicator retries.
     }
   }, [accessToken]);
 
@@ -303,7 +303,7 @@ export function InternalMessagingHost() {
   if (activated && status) {
     return (
       <MessagingWindowBoundary
-        key={loadAttempt}
+        key={`${user?.publicID || "signed-out"}:${loadAttempt}`}
         onError={() => setWindowLoadFailed(true)}
         fallback={
           <LauncherLoadFailure

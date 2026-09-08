@@ -20,7 +20,9 @@
     "mute": "静音会话",
     "unmute": "取消静音",
     "imagePreview": "图片预览",
-    "closePreview": "关闭图片预览"
+    "closePreview": "关闭图片预览",
+    "expand": "展开聊天窗口",
+    "restore": "还原聊天窗口"
   },
   "errors": {
     "windowLoad": "聊天窗口加载失败。",
@@ -64,14 +66,19 @@
     "reply": "回复",
     "edit": "编辑",
     "delete": "撤回",
-    "confirmDelete": "确定撤回这条消息吗？"
+    "confirmDelete": "确定撤回这条消息吗？",
+    "sending": "发送中…",
+    "failed": "发送未确认，请检查记录后重试。",
+    "retry": "重试",
+    "discard": "移除"
   },
   "composer": {
     "editing": "编辑消息",
     "replying": "回复：{content}",
     "file": "文件",
     "placeholder": "输入消息…",
-    "dropFile": "松开发送此文件"
+    "dropFile": "松开发送此文件",
+    "tooLong": "消息不能超过 4000 个字符。"
   },
   "directory": {
     "recent": "最近会话",
@@ -80,10 +87,14 @@
     "noRecent": "还没有最近会话，可从全部用户发起聊天。",
     "start": "开始聊天",
     "noUsers": "没有可聊天的用户。",
-    "loadMore": "加载更多用户"
+    "loadMore": "加载更多用户",
+    "loadMoreConversations": "加载更多会话"
   },
   "file": {
     "tooLarge": "单个文件不能超过 {size}。",
     "unknownSize": "未知大小"
+  },
+  "connection": {
+    "reconnecting": "正在连接聊天服务，消息可能延迟…"
   }
 }

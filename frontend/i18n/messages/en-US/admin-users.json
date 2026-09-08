@@ -39,7 +39,9 @@
     "failures": "Request failures",
     "latency": "Average latency",
     "messages": "Indexed messages",
-    "files": "File storage"
+    "files": "File storage",
+    "indexFailures": "Index failures",
+    "pendingIndexRepairs": "Pending index repairs"
   },
   "aboutPage": {
     "title": "About",

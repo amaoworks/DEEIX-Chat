@@ -58,6 +58,7 @@ type OpenWebUIUserRow struct {
 
 // UserListFilter 定义管理员用户列表过滤条件。
 type UserListFilter struct {
+	IDs                []uint // nil means unrestricted; an empty slice matches no users.
 	Query              string
 	SubscriptionStatus string
 	IdentityProvider   string

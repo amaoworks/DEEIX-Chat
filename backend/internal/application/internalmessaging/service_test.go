@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -37,9 +39,12 @@ func (f fakeUsers) GetByPublicID(_ context.Context, publicID string) (*domainuse
 	}
 	return nil, errors.New("not found")
 }
-func (f fakeUsers) ListUsers(_ context.Context, offset, limit int, _ repository.UserListFilter) ([]domainuser.User, int64, error) {
+func (f fakeUsers) ListUsers(_ context.Context, offset, limit int, filter repository.UserListFilter) ([]domainuser.User, int64, error) {
 	all := make([]domainuser.User, 0, len(f.items))
 	for _, item := range f.items {
+		if filter.IDs != nil && !slices.Contains(filter.IDs, item.ID) {
+			continue
+		}
 		all = append(all, item)
 	}
 	if offset >= len(all) {
@@ -142,7 +147,7 @@ func (f *fakeVoce) Delete(_ context.Context, _ string, mid int64) (int64, error)
 	f.deletedMID = mid
 	return 10, f.deleteErr
 }
-func (f *fakeVoce) UploadFile(context.Context, string, string, string, []byte) (vocechat.UploadedFile, error) {
+func (f *fakeVoce) UploadFileStream(context.Context, string, string, string, io.Reader, int64) (vocechat.UploadedFile, error) {
 	return vocechat.UploadedFile{Path: "2026/8/21/file", Size: 4}, nil
 }
 func (f *fakeVoce) SendFile(context.Context, string, int64, string) (int64, error) {
@@ -271,7 +276,7 @@ func TestLocalConversationUpdatesDoNotLoginToVoceChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}, &model.InternalMessagingIndexRepair{}); err != nil {
 		t.Fatal(err)
 	}
 	store := internalmessagingrepo.NewRepo(db)
@@ -366,7 +371,7 @@ func TestProcessEventAppliesEditAndDeleteReactionWithoutNewUnread(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}, &model.InternalMessagingIndexRepair{}); err != nil {
 		t.Fatal(err)
 	}
 	store := internalmessagingrepo.NewRepo(db)
@@ -429,7 +434,7 @@ func TestCleanupExpiredRetriesFailuresAndKeepsRecentMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}, &model.InternalMessagingIndexRepair{}); err != nil {
 		t.Fatal(err)
 	}
 	store := internalmessagingrepo.NewRepo(db)
@@ -490,7 +495,7 @@ func TestSendFileEnforcesSizeAndUserQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}); err != nil {
+	if err = db.AutoMigrate(&model.InternalMessagingBinding{}, &model.InternalMessagingMessage{}, &model.InternalMessagingConversation{}, &model.InternalMessagingIndexRepair{}); err != nil {
 		t.Fatal(err)
 	}
 	store := internalmessagingrepo.NewRepo(db)

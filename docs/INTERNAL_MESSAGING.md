@@ -194,5 +194,38 @@ docker compose -f docker-compose.yml -f docker-compose.vocechat.yml restart app
 
 - DEEIX 用户目录是唯一可信来源；只有 `active` 用户可被选择和收发消息。
 - 用户第一次打开聊天或成为消息接收方时，DEEIX 后端会自动创建或恢复 VoceChat 身份，并持久化绑定关系。
-- VoceChat 停止时，DEEIX 的 AI 聊天、登录与其他功能不受影响；站内消息入口会隐藏或返回暂不可用。
+- VoceChat 暂时停止时，DEEIX 的 AI 聊天、登录与其他功能不受影响；站内消息保留窗口和草稿，显示连接提示并自动重连。管理员禁用功能时仍会关闭入口。
 - 请在实际对外、超过免费限制或商业使用前确认 VoceChat 当前许可证和授权条件。
+
+## 消息可靠性与交互
+
+- 草稿、回复目标、编辑目标和待发送消息按联系人隔离，保存在当前页面会话的内存中。关闭浮窗或切换联系人不会串用草稿；刷新页面后不会恢复这些内存状态。
+- 文本、编辑和附件均显示独立的发送中或失败状态。失败项可以重试或移除，不会覆盖之后输入的文字。网络中断可能使发送结果不确定，重试前应检查消息记录；后台索引修复不会重新发送消息。
+- 中文输入法确认候选词和 `Shift+Enter` 不触发发送。正文上限为 4000 个 Unicode 字符。
+- 只有页面可见、拥有焦点、当前会话打开且处于消息底部时才推进已读。后台到达的消息仍按通知和静音设置提醒；向上翻阅时通过“有新消息”返回底部。
+- 最近会话支持继续分页加载。桌面窗口支持展开和还原；超过 120 条消息时启用虚拟列表，并在行高变化后继续跟随底部。
+- 实时连接采用带随机抖动的指数退避，最大重试间隔为 30 秒；长时间没有数据时重新连接。重连后补齐当前会话的最新历史，正在向上翻阅时保留位置并提示返回最新消息。
+
+## 索引恢复
+
+发送、回复、编辑、撤回和附件发送之前，DEEIX 先在本地数据库写入 `internal_messaging_index_repairs` 恢复记录。无法写入恢复记录时，不执行消息变更；VoceChat 已经成功但本地索引失败时，保留恢复记录，不把已成功的发送误报为失败。
+
+后台每 15 秒检查恢复任务。为避免与执行中的请求竞争，任务最早在创建两分钟后执行；失败后稍后重试。每次最多读取 10 页历史，并持久化分页进度，重启后可继续处理。修复通过读取历史补齐索引和未读状态，不重放发送操作。消息的 `last_event_mid` 防止旧编辑或重复事件覆盖较新的状态。
+
+新增表和字段随现有数据库 schema migration 一起创建。管理页展示索引写入失败次数和待修复任务数；失败次数是当前进程计数，待修复任务来自持久化数据库。多设备收到相同实时事件时，同一 DEEIX 实例会合并重复索引工作。
+
+## 修复验证（2026-09-08）
+
+前端单元测试涵盖草稿隔离、失败后继续输入、原目标重试、输入法回车、已读条件、分页与取消、缓存、事件解析和重连退避。后端测试覆盖索引故障后重启恢复、不重复发送或累加未读、跨多页恢复、事件顺序保护、批量用户查询及流式附件转发。
+
+```bash
+pnpm --dir frontend test:internal-messaging
+pnpm --dir frontend typecheck
+cd backend
+go test -race ./internal/application/internalmessaging ./internal/transport/http/internalmessaging ./internal/infra/integration/vocechat ./internal/infra/persistence/postgres/internalmessaging ./internal/infra/persistence/postgres/user
+go test ./internal/infra/integration/vocechat -run '^$' -bench BenchmarkUploadFileStream -benchmem
+```
+
+另外使用 Chromium、实际窗口组件和 Tailwind 样式验证了草稿切换、中文输入事件、失败重试、后台已读与通知、索引恢复后的同游标已读对齐、翻阅时的新消息提醒、重连补历史、125 个会话分页、窗口展开及 390×844 移动端布局。测试接口和 Markdown 正文渲染使用隔离替身，没有连接生产服务。
+
+该隔离页面一次注入 1000 条实时事件，本机最终测试约 368 毫秒后显示最新消息，挂载 19 个消息节点。流式上传基准中，1 MiB 和 20 MiB 文件每次分配均约 21 KB。前者反映前端事件与虚拟列表表现，后者反映客户端转发的内存分配；均不代表真实 VoceChat、数据库和网络组成的生产环境容量。
