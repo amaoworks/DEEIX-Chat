@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -522,10 +523,10 @@ func TestSendFileEnforcesSizeAndUserQuota(t *testing.T) {
 		return Policy{Enabled: true, MaxFileBytes: 10, UserQuotaBytes: 5}
 	})
 
-	if _, err = service.SendFile(ctx, 1, "target", "large.txt", "text/plain", []byte("01234567890")); !errors.Is(err, ErrFileTooLarge) {
+	if _, err = service.SendFileStream(ctx, 1, "target", "large.txt", "text/plain", strings.NewReader("01234567890"), 11); !errors.Is(err, ErrFileTooLarge) {
 		t.Fatalf("oversized file error = %v", err)
 	}
-	if _, err = service.SendFile(ctx, 1, "target", "quota.txt", "text/plain", []byte("12")); !errors.Is(err, ErrQuotaExceeded) {
+	if _, err = service.SendFileStream(ctx, 1, "target", "quota.txt", "text/plain", strings.NewReader("12"), 2); !errors.Is(err, ErrQuotaExceeded) {
 		t.Fatalf("quota error = %v", err)
 	}
 }

@@ -2,7 +2,6 @@ package internalmessaging
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -448,10 +447,6 @@ func (s *Service) Delete(ctx context.Context, actorID uint, mid int64) error {
 	return nil
 }
 
-func (s *Service) SendFile(ctx context.Context, actorID uint, recipientPublicID, filename, contentType string, content []byte) (ChatMessage, error) {
-	return s.SendFileStream(ctx, actorID, recipientPublicID, filename, contentType, bytes.NewReader(content), int64(len(content)))
-}
-
 func (s *Service) SendFileStream(ctx context.Context, actorID uint, recipientPublicID, filename, contentType string, content io.Reader, size int64) (ChatMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
@@ -548,21 +543,6 @@ func (s *Service) DownloadFile(ctx context.Context, actorID uint, mid int64, thu
 		return nil, ChatFile{}, err
 	}
 	return upstream, metadata.ChatFile, nil
-}
-
-func (s *Service) ReadUpload(reader io.Reader, declaredSize int64) ([]byte, error) {
-	maxBytes := s.policy().MaxFileBytes
-	if declaredSize > maxBytes {
-		return nil, ErrFileTooLarge
-	}
-	content, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(content)) > maxBytes {
-		return nil, ErrFileTooLarge
-	}
-	return content, nil
 }
 
 func (s *Service) Events(ctx context.Context, actorID uint, afterMID int64) (*http.Response, error) {
