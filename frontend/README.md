@@ -1,6 +1,6 @@
 # DEEIX Chat Frontend
 
-DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责聊天工作区、模型参数配置、文件页、最近会话、用户设置、MCP 工具选择、官方原生工具配置和管理员后台。
+DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责聊天工作区、站内私聊浮窗、模型参数配置、文件页、最近会话、用户设置、MCP 工具选择、官方原生工具配置和管理员后台。
 
 ## 技术栈
 
@@ -24,7 +24,8 @@ DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责�
 - `features/files`：文件管理、上传状态、文件卡片、预览、单个/批量删除和存储配额展示
 - `features/knowledge-bases`：个人与内置知识库管理、资料关联、检索就绪状态和知识库文件预览
 - `features/settings`：用户侧通用、偏好、订阅和账户设置
-- `features/admin`：后台账户、上游、模型、计费、日志、身份源、登录、会话、文件、官方原生工具计费和 MCP 工具设置
+- `features/admin`：后台账户、上游、模型、计费、日志、身份源、登录、会话、文件、官方原生工具计费、MCP 工具设置和站内消息
+- `features/internal-messaging`：站内私聊浮窗、会话列表、实时事件、草稿和附件
 - `shared/api/`：API 请求封装与通用类型
 - `shared/auth/`：会话 token、登录态与鉴权辅助
 - `shared/hooks/`：跨业务复用 hooks
@@ -67,8 +68,11 @@ DEEIX Chat 前端是基于 Next.js App Router 的管理与对话界面，负责�
 - `/admin/tools`：MCP 工具设置
 - `/admin/chat-files`：文件、提取、OCR、RAG 和用户存储配额设置
 - `/admin/conversation`：会话配置和参数透传策略
+- `/admin/internal-messaging`：站内消息启停、文件限额、保留策略和 VoceChat 运行状态
 - `/admin/login`：登录、注册、身份源和安全策略
 - `/admin/about`：版本信息和新版本检查
+
+用户侧私聊没有独立页面，入口是登录后各业务页上的浮窗。部署、CDN 和 VoceChat overlay 见仓库根目录 [docs/INTERNAL_MESSAGING.md](../docs/INTERNAL_MESSAGING.md)。
 
 ## API 契约
 

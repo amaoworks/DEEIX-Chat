@@ -37,6 +37,7 @@ DEEIX Chat 是一款开源可部署的 AI 平台，面向需要长期、稳定�
 | 模块 | 能力 |
 | --- | --- |
 | 对话体验 | 面向日常高频使用的多模态对话界面，支持流式响应、多分支、重试、编辑、反馈、分享、富文本渲染和可追踪的模型执行信息。 |
+| 站内私聊 | 可选的用户间私聊面板。DEEIX 提供 UI 与 API；VoceChat 只在 Docker 内网保存消息和实时事件，不暴露给浏览器。 |
 | 模型与路由 | 以平台模型为统一入口管理上游渠道、真实模型、路由绑定、优先级、权重、熔断、厂商映射和能力配置，降低多供应商接入后的维护成本。 |
 | 协议与适配 | 统一适配 OpenAI、Anthropic、Google/Gemini、xAI、OpenRouter 和 OpenAI 兼容协议，覆盖文本、图片、工具和不同厂商的原生能力差异。 |
 | 文件与检索 | 提供文件上传、预览、提取、OCR、存储配额、全文注入、分片、向量嵌入和语义检索能力，让文件内容自然进入对话上下文。 |
@@ -89,6 +90,10 @@ flowchart TB
     Storage["本地文件系统<br/>或 S3 兼容存储"]
   end
 
+  subgraph Optional["可选站内消息"]
+    VoceChat["VoceChat<br/>仅 Docker 内网"]
+  end
+
   Web --> Static
   Browser --> Static
   Browser --> HTTP
@@ -100,6 +105,7 @@ flowchart TB
   Infra --> DB
   Infra --> Cache
   Infra --> Storage
+  Infra --> VoceChat
 ```
 
 | 层面 | 职责 | 主要技术 |
@@ -110,6 +116,7 @@ flowchart TB
 | 文件与存储 | 上传文件、生成文件、对象存储和本地持久化 | 本地文件系统、S3 兼容对象存储 |
 | 文件处理 | 文本提取、OCR、文档解析和 LLM OCR 回退 | 内置提取、Apache Tika、Docling、RapidOCR、Tesseract OCR、Paddle OCR、云 OCR 适配、MinerU |
 | 工具协议 | MCP 工具接入和厂商官方原生工具调用 | MCP Streamable HTTP JSON-RPC、Provider Native Tools |
+| 站内消息 | 可选的私聊存储与实时事件；浏览器只访问 DEEIX，由后端代理 VoceChat | Docker 内网中的 VoceChat |
 | 部署运行 | 单节点轻量部署或多节点生产部署 | Docker、Docker Compose、SQLite/内存缓存、PostgreSQL/Redis |
 
 后端内部保持清晰分层：`cmd/internal/cli` 负责启动入口，`internal/app` 负责应用装配，`transport/http` 负责 HTTP 边界，`application` 负责业务用例与事务编排，`domain` 表达领域语义，`infra` 承载数据库、缓存、存储和外部协议实现。数据层按领域前缀组织表结构，财务流水、审计日志、系统事件和高增长向量数据保持独立事实源。
@@ -161,6 +168,14 @@ NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080
 
 不配置 `NEXT_PUBLIC_API_BASE_URL` 时，本地默认指向 `localhost:8080`；同源部署默认请求当前 origin。
 
+若要同时启动可选的站内私聊（内网 VoceChat 以及 DEEIX API 与 Web），使用：
+
+```bash
+./scripts/dev-deeix.sh
+```
+
+对外地址、备份和升级说明见[站内消息](./INTERNAL_MESSAGING.md)。
+
 ### Docker 部署
 
 Docker 部署先选择安装方案，再复制对应的配置文件。三套根目录 compose 文件都默认将应用暴露在 `http://localhost:8080`，并把仓库根目录的 `config.yaml` 挂载到容器内 `/app/config.yaml`。
@@ -170,6 +185,8 @@ Docker 部署先选择安装方案，再复制对应的配置文件。三套根�
 | 轻量安装 | 本地试用、个人部署、小型单节点 | `config.sqlite.example.yaml` | `docker-compose.sqlite.yml` | 仅应用容器，SQLite + sqlite-vec + 内存缓存 |
 | 默认安装 | 已有外部 PostgreSQL 和 Redis | `config.example.yaml` | `docker-compose.yml` | 仅应用容器 |
 | 全量安装 | 单机同时部署应用、PostgreSQL 和 Redis | `config.full.example.yaml` | `docker-compose.full.yml` | 应用、PostgreSQL、Redis |
+
+可选：在上述任一方案上叠加 `docker-compose.vocechat.yml`，即可启用站内私聊。VoceChat 不映射宿主机端口。详见[站内消息](./INTERNAL_MESSAGING.md)。
 
 #### 1. 轻量安装：SQLite
 
@@ -205,6 +222,26 @@ docker compose -f docker-compose.full.yml up -d
 
 `docker-compose.full.yml` 会在 compose `environment` 中设置 `POSTGRES_DSN`、`REDIS_ADDR`、`REDIS_USERNAME` 和 `REDIS_PASSWORD`，因此这些值会覆盖 `config.yaml` 里的数据库和 Redis 配置。
 
+#### 4. 可选站内消息 overlay
+
+在已选择的安装方案上叠加 `docker-compose.vocechat.yml`，即可启用站内私聊面板。VoceChat 只监听 compose 网络，浏览器不会直接连接它。
+
+将 `VOCECHAT_IMAGE` 设为已经审查过的 tag 或 digest，不要使用 `latest`。
+
+```bash
+VOCECHAT_IMAGE='privoce/vocechat-server@sha256:dc3ad835c05e997852d0327aba958e11e46730ae89e249faa0b760931ac9eb87' \
+  docker compose -f docker-compose.yml -f docker-compose.vocechat.yml up -d
+```
+
+同一 overlay 也可叠在另外两套方案上，同样需要设置 `VOCECHAT_IMAGE`：
+
+```bash
+docker compose -f docker-compose.sqlite.yml -f docker-compose.vocechat.yml up -d
+docker compose -f docker-compose.full.yml -f docker-compose.vocechat.yml up -d
+```
+
+overlay 会向 app 容器写入 `INTERNAL_MESSAGING_ENABLED`、`INTERNAL_MESSAGING_VOCECHAT_URL` 和 `INTERNAL_MESSAGING_SECRET_FILE`，不必把 third-party secret 写进 `config.yaml`。初始化、备份、密钥轮换和升级检查见[站内消息](./INTERNAL_MESSAGING.md)。
+
 #### 配置、持久化和镜像
 
 配置优先级是：`环境变量 > config.yaml > 代码内置默认值`。`config.yaml` 负责品牌和静态基础设施、安全配置，例如品牌资源、服务地址、数据库、缓存、存储、GeoIP、Trace、JWT 和加密密钥。运行时业务配置存储在数据库中，并通过后台管理修改。
@@ -217,6 +254,9 @@ docker compose -f docker-compose.full.yml up -d
 | 上传文件和生成文件 | `/app/storage` |
 | PostgreSQL 数据 | `/var/lib/postgresql/data`，仅全量安装 |
 | Redis 数据 | `/data`，仅全量安装 |
+| VoceChat 消息 | `/home/vocechat-server/data`，仅站内消息 overlay |
+| VoceChat third-party secret | `/run/secrets/vocechat`，仅站内消息 overlay |
+| VoceChat 初始化凭据 | `/var/lib/deeix-vocechat-init`，仅站内消息 overlay |
 
 默认应用镜像为 `ghcr.io/deeix-ai/deeix-chat:latest`。测试自定义构建时可通过 `DEEIX_CHAT_IMAGE` 覆盖：
 
@@ -230,6 +270,8 @@ DEEIX_CHAT_IMAGE=deeix-chat:local docker compose up -d --build
 
 这些服务不是必须安装。只有在后台或 `config.yaml` 中启用对应文件处理能力时才需要启动。
 这些 compose 文件会接入 `deeix-chat-network`；请先启动任一根目录 compose 方案，或手动执行 `docker network create deeix-chat-network`。
+
+站内消息不是这类提取服务。启用方式是叠加上一节的 VoceChat overlay，而不是再写一份类似 Tika 的 sidecar compose。
 
 ```bash
 docker compose -f docker/tika/docker-compose.yml up -d
@@ -281,8 +323,12 @@ docker compose -f docker/docling/docker-compose.yml up -d --build
    | `/logo*.svg`、`/*.ico`、`/*.png`、`/*.jpg`、`/*.webp`、`/*.woff2` | 缓存 1 天到 30 天。 |
    | `/`、`/*.html`、`/chat*`、`/recent*`、`/files*`、`/knowledges*`、`/setting*`、`/admin*`、`/share*` | 不做长期缓存，建议使用 `no-cache` 或较短 TTL。 |
    | `/api/*`、`/healthz`、`/readyz`、`/swagger/*` | 绕过 CDN 缓存，并完整转发请求头、方法、查询参数和请求体。 |
+   | `/api/v1/internal-messaging/events` | 绕过缓存。关闭响应缓冲并拉长空闲超时；这是长连接 SSE。 |
+   | `/api/v1/internal-messaging/*` | 绕过缓存。完整转发上传和鉴权下载，不要把这些对象缓存在 CDN。 |
 
    如果 CDN 从对象存储托管 `frontend/out`，需要开启路由回退，让无扩展名地址能命中导出的 `index.html`，例如 `/chat` -> `/chat/index.html`。
+
+   站内私聊不会增加一个对公网的 VoceChat 源。不要把 VoceChat（`:3000`）挂到 CDN 或反代上。浏览器只访问 DEEIX，由 DEEIX 代理 `/api/v1/internal-messaging/*`。Nginx 应关闭 `proxy_buffering`（API 已发送 `X-Accel-Buffering: no`），为 SSE 拉长 `proxy_read_timeout`，并把 `client_max_body_size` 设为至少「管理页单文件上限 + 1 MiB」（默认 20 MiB，最大 100 MiB）。部分边缘 CDN 会在约 100 秒切断 SSE，客户端会重连，但未读和在线状态会滞后。`/admin/internal-messaging` 已包含在 `/admin*` 的 HTML 规则中。完整反代示例见[站内消息](./INTERNAL_MESSAGING.md)。
 
 ### 启动后检查与首次登录
 
@@ -383,8 +429,13 @@ docker compose logs app
 | OpenTelemetry | `OTEL_EXPORTER_OTLP_INSECURE` | 是否使用明文传输。 |
 | OpenTelemetry | `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP exporter 协议：`grpc`、`http` 或 `http/protobuf`；默认 `grpc`。 |
 | OpenTelemetry | `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SAMPLING_RATE` | Trace 采样率，范围 `0~1`；`OTEL_TRACES_SAMPLER_ARG` 优先。 |
+| 站内消息 | `INTERNAL_MESSAGING_ENABLED` | 是否启用站内私聊面板。VoceChat overlay 会设为 `true`。 |
+| 站内消息 | `INTERNAL_MESSAGING_VOCECHAT_URL` | 内网 VoceChat 地址，通常是 `http://vocechat:3000`。不要把该地址暴露给浏览器。 |
+| 站内消息 | `INTERNAL_MESSAGING_SECRET_FILE` | third-party secret 文件路径。优先使用文件，而不是内联密钥。 |
+| 站内消息 | `INTERNAL_MESSAGING_SECRET` | 内联 third-party secret；仅在无法挂载 secret 文件时使用。 |
+| 站内消息 | `INTERNAL_MESSAGING_TIMEOUT_MS` | VoceChat HTTP 超时（毫秒），默认 `10000`。不作用于 SSE 长连接。 |
 
-认证、注册、会话配置、模型参数策略、文件处理、RAG、Embedding、MCP、计费、支付和公告等运行时业务配置不属于静态 YAML 配置，默认值由后端种子初始化，并在后台管理中维护。
+认证、注册、会话配置、模型参数策略、文件处理、RAG、Embedding、MCP、计费、支付、公告和站内消息策略（启停、文件限额、保留天数、浏览器通知）等运行时业务配置不属于静态 YAML 配置，默认值由后端种子初始化，并在后台管理中维护。VoceChat 地址和 third-party secret 仍属于启动级配置。
 
 生产环境启用 SSRF 防护后，管理员保存的模型、MCP、Embedding、OIDC/OAuth2 和自定义 Turnstile endpoint 均按精确 origin（协议、主机和端口）获得局部授权，不需要加入全局白名单。模型、MCP 与 Embedding 保留标准重定向兼容性：跨 origin 的公网目标可以继续访问，跨 origin 的私网目标必须命中 `SSRF_ALLOWED_HOSTS` 或 `SSRF_ALLOWED_CIDRS`；OIDC/OAuth2 与 Turnstile 继续维持更严格的身份边界。模型生成的图片或视频由后端下载、校验并转存：私网制品 URL 只有与本次选中的模型 endpoint 同 origin 时才继承该局部信任；跨 origin 的公网制品仍按严格公网策略下载，跨 origin 的私网制品会被拦截。全局白名单也继续用于无法绑定管理员保存 endpoint 的部署级集成，例如部分 GeoIP 或提取服务部署。链路本地、组播、未指定地址和已知云元数据目标始终禁止。白名单配置不合法会阻止后端启动；全局白名单修改后需重启生效。
 
@@ -403,6 +454,7 @@ Web、App 与桌面端会自动复用当前实例的这个回调。外部身份�
 - [用户指南](https://deeix.com/zh/docs/deeix-chat/new-chat)
 - [管理指南](https://deeix.com/zh/docs/deeix-chat/admin-accounts)
 - [进阶指南](https://deeix.com/zh/docs/deeix-chat/advanced-capabilities-passthrough-tools)
+- [站内消息](./INTERNAL_MESSAGING.md)
 
 ## 安全说明
 
@@ -412,6 +464,7 @@ Web、App 与桌面端会自动复用当前实例的这个回调。外部身份�
 - 上游 API Key、SSO Client Secret、MCP 鉴权 Token、敏感系统设置和 TOTP Secret 使用 `DATA_ENCRYPTION_KEY` 通过 AES-GCM 加密。
 - Access Token 为短期令牌并保存在前端内存中；Refresh Token 由后端写入 HttpOnly Cookie。
 - 用户输入的模型参数会在请求上游前经过白名单/黑名单过滤。模型名、消息、工具、系统提示词、请求头和 previous response 标识等系统链路字段不允许被用户 options 覆盖。
+- 启用站内消息后，VoceChat token、`X-SECRET` 和文件路径不会到达浏览器。事件、历史和下载均由 DEEIX 代理。
 
 ## 文档入口
 
@@ -420,6 +473,7 @@ Web、App 与桌面端会自动复用当前实例的这个回调。外部身份�
 - [用户指南](https://deeix.com/zh/docs/deeix-chat/new-chat)
 - [管理指南](https://deeix.com/zh/docs/deeix-chat/admin-accounts)
 - [进阶指南](https://deeix.com/zh/docs/deeix-chat/advanced-capabilities-passthrough-tools)
+- 站内消息（VoceChat）：[INTERNAL_MESSAGING.md](./INTERNAL_MESSAGING.md)
 - 后端说明：[backend/README.md](../backend/README.md)
 - 后端规范：[backend/docs/README.md](../backend/docs/README.md)
 - 前端说明：[frontend/README.md](../frontend/README.md)

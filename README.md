@@ -37,6 +37,7 @@ The system is designed around simple deployment, efficient static delivery, and 
 | Area | Capabilities |
 | --- | --- |
 | Conversations | A multimodal chat interface for daily use, with streaming, branches, retries, edits, feedback, sharing, rich rendering, and traceable model execution metadata. |
+| Direct messaging | Optional in-app private chat between users. DEEIX owns the UI and API; VoceChat stays on the Docker network and is never exposed to browsers. |
 | Models and routing | A platform-model layer for upstream channels, real models, route bindings, priority, weights, circuit breaking, vendor mapping, and capability configuration, reducing the cost of multi-provider operations. |
 | Protocols and adaptation | Unified support for OpenAI, Anthropic, Google/Gemini, xAI, OpenRouter, and OpenAI-compatible protocols across text, image, tools, and provider-native capability differences. |
 | Files and retrieval | File upload, preview, extraction, OCR, storage quota, full-context injection, chunking, embeddings, and semantic retrieval so file content can naturally enter the conversation context. |
@@ -89,6 +90,10 @@ flowchart TB
     Storage["Local Filesystem<br/>or S3-Compatible Storage"]
   end
 
+  subgraph Optional["Optional Internal Messaging"]
+    VoceChat["VoceChat<br/>Docker network only"]
+  end
+
   Web --> Static
   Browser --> Static
   Browser --> HTTP
@@ -100,6 +105,7 @@ flowchart TB
   Infra --> DB
   Infra --> Cache
   Infra --> Storage
+  Infra --> VoceChat
 ```
 
 | Layer | Responsibility | Technologies |
@@ -110,6 +116,7 @@ flowchart TB
 | Files and storage | Uploaded files, generated files, object storage, and local persistence | Local filesystem, S3-compatible object storage |
 | File processing | Text extraction, OCR, document parsing, and LLM OCR fallback | Built-in extractors, Apache Tika, Docling, RapidOCR, Tesseract OCR, Paddle OCR, cloud OCR adapters, MinerU |
 | Tool protocol | MCP tool integration and provider-native official tools | MCP Streamable HTTP JSON-RPC, provider-native tools |
+| Internal messaging | Optional private-message store and realtime events; DEEIX proxies all browser traffic | VoceChat on the Docker network |
 | Deployment runtime | Lightweight single-node deployment or multi-node production deployment | Docker, Docker Compose, SQLite/in-memory cache, PostgreSQL/Redis |
 
 The backend keeps clear internal boundaries: `cmd/internal/cli` handles entrypoints, `internal/app` assembles the application, `transport/http` owns the HTTP boundary, `application` coordinates use cases and transactions, `domain` expresses business semantics, and `infra` contains database, cache, storage, and external protocol implementations. The data layer uses domain-prefixed tables, while financial records, audit trails, system events, and high-growth vector data remain separate sources of truth.
@@ -161,6 +168,14 @@ URLs:
 
 If `NEXT_PUBLIC_API_BASE_URL` is omitted, local development defaults to `localhost:8080`; same-origin deployments use the current origin.
 
+To also start the optional in-app direct-message panel (private VoceChat plus DEEIX API and Web), use:
+
+```bash
+./scripts/dev-deeix.sh
+```
+
+See [Internal messaging](docs/INTERNAL_MESSAGING.md) for advertise-host, backup, and upgrade details.
+
 ### Docker Deployment
 
 Choose one installation profile first, then copy the matching config file. All root compose profiles expose the app at `http://localhost:8080` by default and mount the repository-level `config.yaml` to `/app/config.yaml` inside the container.
@@ -170,6 +185,8 @@ Choose one installation profile first, then copy the matching config file. All r
 | Lightweight | Local evaluation, personal use, small single-node deployments | `config.sqlite.example.yaml` | `docker-compose.sqlite.yml` | App only, SQLite + sqlite-vec + in-memory cache |
 | Default | External PostgreSQL and Redis already exist | `config.example.yaml` | `docker-compose.yml` | App only |
 | Full | Single-machine stack with app, PostgreSQL, and Redis | `config.full.example.yaml` | `docker-compose.full.yml` | App, PostgreSQL, Redis |
+
+Optional: stack `docker-compose.vocechat.yml` on any profile above to enable in-app direct messaging. VoceChat has no host port. See [Internal messaging](docs/INTERNAL_MESSAGING.md).
 
 #### 1. Lightweight Installation: SQLite
 
@@ -205,6 +222,26 @@ docker compose -f docker-compose.full.yml up -d
 
 `docker-compose.full.yml` sets `POSTGRES_DSN`, `REDIS_ADDR`, `REDIS_USERNAME`, and `REDIS_PASSWORD` in compose `environment`, so those values override the database and Redis values in `config.yaml`.
 
+#### 4. Optional Internal Messaging Overlay
+
+Enable the in-app direct-message panel by stacking `docker-compose.vocechat.yml` on the profile you already chose. VoceChat listens only on the compose network; browsers never connect to it.
+
+Set `VOCECHAT_IMAGE` to a reviewed tag or digest. Do not use `latest`.
+
+```bash
+VOCECHAT_IMAGE='privoce/vocechat-server@sha256:dc3ad835c05e997852d0327aba958e11e46730ae89e249faa0b760931ac9eb87' \
+  docker compose -f docker-compose.yml -f docker-compose.vocechat.yml up -d
+```
+
+The same overlay works with the other profiles. `VOCECHAT_IMAGE` is still required:
+
+```bash
+docker compose -f docker-compose.sqlite.yml -f docker-compose.vocechat.yml up -d
+docker compose -f docker-compose.full.yml -f docker-compose.vocechat.yml up -d
+```
+
+The overlay writes `INTERNAL_MESSAGING_ENABLED`, `INTERNAL_MESSAGING_VOCECHAT_URL`, and `INTERNAL_MESSAGING_SECRET_FILE` into the app container. You do not need to put the third-party secret in `config.yaml`. Initialization, backup, secret rotation, and upgrade checks are in [Internal messaging](docs/INTERNAL_MESSAGING.md).
+
 #### Configuration, Persistence, and Image
 
 Configuration priority is `environment variables > config.yaml > built-in defaults`. `config.yaml` is for static infrastructure and security configuration such as server URLs, database, cache, storage, GeoIP, tracing, JWT, and encryption keys. Runtime business settings are stored in the database and managed in the admin console.
@@ -217,6 +254,9 @@ The default compose files persist application data:
 | Uploaded and generated files | `/app/storage` |
 | PostgreSQL data | `/var/lib/postgresql/data`, full installation only |
 | Redis data | `/data`, full installation only |
+| VoceChat messages | `/home/vocechat-server/data`, messaging overlay only |
+| VoceChat third-party secret | `/run/secrets/vocechat`, messaging overlay only |
+| VoceChat init credentials | `/var/lib/deeix-vocechat-init`, messaging overlay only |
 
 The default application image is `ghcr.io/deeix-ai/deeix-chat:latest`. Override it with `DEEIX_CHAT_IMAGE` when testing a custom build:
 
@@ -230,6 +270,8 @@ DEEIX_CHAT_IMAGE=deeix-chat:local docker compose up -d --build
 
 These services are optional. Start only the ones you enable in the admin console or `config.yaml`.
 They attach to `deeix-chat-network`; start one root compose profile first, or create the network manually with `docker network create deeix-chat-network`.
+
+Internal messaging is not one of these extractors. Enable it with the VoceChat overlay in section 4 above, not with a Tika-style sidecar compose file.
 
 ```bash
 docker compose -f docker/tika/docker-compose.yml up -d
@@ -281,8 +323,12 @@ Use this mode when the frontend and backend are served from different public ori
    | `/logo*.svg`, `/*.ico`, `/*.png`, `/*.jpg`, `/*.webp`, `/*.woff2` | Cache for 1 day to 30 days. |
    | `/`, `/*.html`, `/chat*`, `/recent*`, `/files*`, `/knowledges*`, `/setting*`, `/admin*`, `/share*` | Do not long-cache. Use `no-cache` or a short TTL. |
    | `/api/*`, `/healthz`, `/readyz`, `/swagger/*` | Bypass CDN cache and forward all request headers, methods, query strings, and request bodies. |
+   | `/api/v1/internal-messaging/events` | Bypass cache. Disable response buffering and use a long idle timeout; this is a long-lived SSE stream. |
+   | `/api/v1/internal-messaging/*` | Bypass cache. Forward uploads and authenticated file downloads; do not store these objects on the CDN. |
 
    If the CDN serves `frontend/out` from object storage, enable route fallback so clean URLs resolve to their exported `index.html` files, for example `/chat` -> `/chat/index.html`.
+
+   Direct messaging does not add a public VoceChat origin. Do not publish VoceChat (`:3000`) through the CDN or reverse proxy. Browsers only call DEEIX; DEEIX proxies `/api/v1/internal-messaging/*`. Nginx should set `proxy_buffering off` (the API already sends `X-Accel-Buffering: no`), raise `proxy_read_timeout` for SSE, and set `client_max_body_size` to at least the admin file cap plus 1 MiB (default 20 MiB, maximum 100 MiB). Edge CDNs that cap SSE around 100 seconds will drop the live connection; the client reconnects, but unread and presence lag. `/admin/internal-messaging` is covered by the `/admin*` HTML rule. Full reverse-proxy examples are in [Internal messaging](docs/INTERNAL_MESSAGING.md).
 
 ### Startup Check and First Login
 
@@ -383,8 +429,13 @@ Static configuration environment variables:
 | OpenTelemetry | `OTEL_EXPORTER_OTLP_INSECURE` | Whether to use plaintext transport. |
 | OpenTelemetry | `OTEL_EXPORTER_OTLP_PROTOCOL` | OTLP exporter protocol: `grpc`, `http`, or `http/protobuf`; defaults to `grpc`. |
 | OpenTelemetry | `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SAMPLING_RATE` | Trace sampling rate from `0` to `1`; `OTEL_TRACES_SAMPLER_ARG` takes priority. |
+| Internal messaging | `INTERNAL_MESSAGING_ENABLED` | Enables the in-app direct-message panel. The VoceChat overlay sets this to `true`. |
+| Internal messaging | `INTERNAL_MESSAGING_VOCECHAT_URL` | Private VoceChat base URL, typically `http://vocechat:3000`. Do not expose this URL to browsers. |
+| Internal messaging | `INTERNAL_MESSAGING_SECRET_FILE` | Path to the third-party secret file. Prefer this over the inline secret. |
+| Internal messaging | `INTERNAL_MESSAGING_SECRET` | Inline third-party secret; use only when a secret file is unavailable. |
+| Internal messaging | `INTERNAL_MESSAGING_TIMEOUT_MS` | VoceChat HTTP timeout in milliseconds, default `10000`. This does not apply to the SSE stream. |
 
-Authentication, registration, conversation settings, model option policies, file processing, RAG, embedding, MCP, billing, payments, and announcements are runtime business settings, not static YAML configuration. Their defaults are seeded by the backend and maintained in the admin console.
+Authentication, registration, conversation settings, model option policies, file processing, RAG, embedding, MCP, billing, payments, announcements, and internal-messaging policy (enablement, file limits, retention, and browser notifications) are runtime business settings, not static YAML configuration. Their defaults are seeded by the backend and maintained in the admin console. VoceChat URL and third-party secret remain startup-only configuration.
 
 When SSRF protection is enabled in production, administrator-saved model, MCP, Embedding, OIDC/OAuth2, and custom Turnstile endpoints are authorized locally by exact origin (`scheme + host + port`) and do not require entries in the global allowlist. Model, MCP, and Embedding redirects retain standard compatibility: public cross-origin targets are allowed, while private cross-origin targets must match `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`; OIDC/OAuth2 and Turnstile keep their stricter identity boundary. Generated media is downloaded, validated, and stored by the backend: a private artifact URL inherits trust only when it has the same origin as the selected model endpoint; public cross-origin artifact URLs remain subject to the strict public-network policy, and private cross-origin artifact URLs are blocked. The global allowlist also remains available for deployment-level integrations that cannot be tied to an administrator-saved endpoint, such as selected GeoIP or extraction deployments. Link-local, multicast, unspecified, and known metadata targets always remain blocked. Invalid allowlist entries stop backend startup, and global allowlist changes require a restart.
 
@@ -403,6 +454,7 @@ Web, App, and Desktop clients then reuse that instance callback automatically. T
 - [User Guide](https://deeix.com/docs/deeix-chat/new-chat)
 - [Admin Guide](https://deeix.com/docs/deeix-chat/admin-accounts)
 - [Advanced Guide](https://deeix.com/docs/deeix-chat/advanced-capabilities-passthrough-tools)
+- [Internal messaging](docs/INTERNAL_MESSAGING.md)
 
 ## Security Notes
 
@@ -412,6 +464,7 @@ Web, App, and Desktop clients then reuse that instance callback automatically. T
 - Upstream API keys, SSO client secrets, MCP auth tokens, sensitive settings, and TOTP secrets are encrypted with AES-GCM using `DATA_ENCRYPTION_KEY`.
 - Access tokens are short-lived and held client-side in memory; refresh tokens are issued through HttpOnly cookies.
 - User-supplied model options are filtered before provider requests. System-generated fields such as model, messages, tools, system prompts, headers, and previous-response identifiers are not user-overridable.
+- When internal messaging is enabled, VoceChat tokens, `X-SECRET`, and file paths never reach the browser. DEEIX proxies events, history, and downloads.
 
 ## Documentation
 
@@ -420,6 +473,7 @@ Web, App, and Desktop clients then reuse that instance callback automatically. T
 - [User Guide](https://deeix.com/docs/deeix-chat/new-chat)
 - [Admin Guide](https://deeix.com/docs/deeix-chat/admin-accounts)
 - [Advanced Guide](https://deeix.com/docs/deeix-chat/advanced-capabilities-passthrough-tools)
+- Internal messaging (VoceChat): [docs/INTERNAL_MESSAGING.md](./docs/INTERNAL_MESSAGING.md)
 - Backend guide: [backend/README.md](./backend/README.md)
 - Backend standards: [backend/docs/README.md](./backend/docs/README.md)
 - Frontend guide: [frontend/README.md](./frontend/README.md)

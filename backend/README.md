@@ -1,6 +1,6 @@
 # DEEIX Chat Backend
 
-DEEIX Chat 后端是 Go API 服务，负责认证、用户、对话、模型渠道、模型能力、文件处理、知识库、MCP 工具、官方原生工具、记忆、计费、支付、系统设置、审计日志与可观测性等核心业务。
+DEEIX Chat 后端是 Go API 服务，负责认证、用户、对话、可选站内私聊、模型渠道、模型能力、文件处理、知识库、MCP 工具、官方原生工具、记忆、计费、支付、系统设置、审计日志与可观测性等核心业务。
 
 ## 技术栈
 
@@ -18,6 +18,7 @@ DEEIX Chat 后端是 Go API 服务，负责认证、用户、对话、模型渠�
 
 - `docs/README.md`：后端文档索引
 - `docs/swagger.json` / `docs/swagger.yaml`：Swagger API 文档
+- 仓库根目录 [docs/INTERNAL_MESSAGING.md](../docs/INTERNAL_MESSAGING.md)：站内私聊（VoceChat）部署、CDN 与备份
 
 ## 核心约束
 
@@ -87,6 +88,7 @@ cp config.sqlite.example.yaml config.yaml
 - `OTEL_EXPORTER_OTLP_INSECURE`：是否使用明文传输
 - `OTEL_EXPORTER_OTLP_PROTOCOL`：OTLP exporter 协议，支持 `grpc`、`http`、`http/protobuf`，默认 `grpc`
 - `OTEL_TRACES_SAMPLER_ARG` / `OTEL_SAMPLING_RATE`：Trace 采样率，范围 `0~1`
+- `INTERNAL_MESSAGING_ENABLED` / `INTERNAL_MESSAGING_VOCECHAT_URL` / `INTERNAL_MESSAGING_SECRET_FILE` / `INTERNAL_MESSAGING_SECRET` / `INTERNAL_MESSAGING_TIMEOUT_MS`：可选站内私聊。VoceChat 只应出现在 Docker 内网；优先用 `SECRET_FILE`，不要把 VoceChat 暴露给浏览器。启停、文件限额和保留天数在后台「站内消息」中维护。
 
 对应 YAML：
 

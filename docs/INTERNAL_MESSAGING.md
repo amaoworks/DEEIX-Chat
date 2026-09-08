@@ -8,12 +8,21 @@ DEEIX 使用自己的 UI 与 API；VoceChat 仅在 Docker 内网保存消息并�
 
 ## Docker Compose 自动初始化
 
-将 `VOCECHAT_IMAGE` 设为已经审查过的 VoceChat tag 或 digest；不要使用浮动的 `latest`。然后启动 overlay：
+将 `VOCECHAT_IMAGE` 设为已经审查过的 VoceChat tag 或 digest；不要使用浮动的 `latest`。然后把 overlay 叠在当前使用的根目录 compose 方案上：
 
 ```bash
 VOCECHAT_IMAGE='privoce/vocechat-server@sha256:dc3ad835c05e997852d0327aba958e11e46730ae89e249faa0b760931ac9eb87' \
   docker compose -f docker-compose.yml -f docker-compose.vocechat.yml up -d
 ```
+
+同一 overlay 也可叠在轻量和全量方案上，网络名都是 `deeix-chat-network`，同样需要设置 `VOCECHAT_IMAGE`：
+
+```bash
+docker compose -f docker-compose.sqlite.yml -f docker-compose.vocechat.yml up -d
+docker compose -f docker-compose.full.yml -f docker-compose.vocechat.yml up -d
+```
+
+后面的恢复、轮换命令按默认安装写了 `-f docker-compose.yml`。如果实际运行的是轻量或全量方案，把第一份 compose 文件换成正在使用的那份。
 
 `vocechat-init` 会在 VoceChat 健康后自动完成以下操作：
 
@@ -33,6 +42,55 @@ internal_messaging:
 ```
 
 随附的 VoceChat 配置已经开启 `[login] third_party = true`，不要关闭。
+
+## CDN 与反向代理
+
+浏览器只访问 DEEIX。不要把 VoceChat（容器内 `:3000`）映射到宿主机、反代或 CDN。`docker-compose.vocechat.yml` 只用 `expose`，没有 `ports`，请保持这一边界。
+
+站内消息走已有的 DEEIX 源，路径都在 `/api/v1/internal-messaging/*` 和 `/admin/internal-messaging`：
+
+| 路径 | 规则 |
+| --- | --- |
+| `/api/*` | 绕过 CDN 缓存，完整转发请求头、方法、查询参数和请求体。 |
+| `/api/v1/internal-messaging/events` | 长连接 SSE。关闭响应缓冲，拉长读超时和空闲超时。 |
+| `/api/v1/internal-messaging/users/*/files` | 附件上传。请求体上限至少为管理页单文件上限加 1 MiB（默认 20 MiB，最大 100 MiB）。 |
+| `/api/v1/internal-messaging/messages/*/file` | 鉴权下载。浏览器可按 `private, max-age=3600` 缓存；CDN 不得缓存，否则可能把私聊文件提供给其他用户。 |
+| `/admin*`、`/chat*` 等 HTML | 与现有前端规则相同，不要长期缓存。`/admin/internal-messaging` 已包含在 `/admin*` 中。 |
+
+AI 对话流式接口同样需要关闭缓冲；站内消息的 SSE 是常驻连接，更容易被边缘节点的默认超时切断。API 已发送 `X-Accel-Buffering: no` 和 `Cache-Control: no-cache, no-transform`。反代仍需显式关闭缓冲，否则 Nginx 会攒齐响应再发给浏览器，实时消息会卡住。
+
+同源反代示例（应用监听 `127.0.0.1:8080`）：
+
+```nginx
+client_max_body_size 101m;
+
+location /api/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+}
+```
+
+分离部署时，把上述 `/api/` 规则打在 API 源上，HTML 规则打在静态/CDN 源上。不要为 VoceChat 再配一条公网 location。
+
+边缘 CDN 注意：
+
+- `/api/*` 必须 bypass，不能当静态对象缓存。
+- 部分厂商免费档会在约 100 秒切断 SSE。连接被掐后前端会重连并补历史，但未读角标和在线状态会滞后；需要稳定实时通道时，选用支持长连接的套餐，或让浏览器直连源站反代。
+- 上传走 `multipart/form-data`，确认 CDN 没有把 POST body 截断到小于管理页文件上限。
 
 ## 本地源码调试
 
@@ -183,7 +241,7 @@ docker compose -f docker-compose.yml -f docker-compose.vocechat.yml restart app
 
 ## 验收清单
 
-1. 两个普通用户互发消息，验证离线未读、按钮角标、最近会话和多设备已读同步。
+1. 两个普通用户互发消息，验证离线未读、按钮角标、最近会话和多设备已读同步。若前面有 CDN 或反代，确认实时事件能持续推送、附件上传不被截断、文件下载未命中公共缓存。
 2. 分别验证文本回复、编辑、撤回，以及搜索结果定位到历史消息。
 3. 上传图片和普通文件，确认预览/下载需要 DEEIX 登录，且浏览器网络请求中没有 VoceChat token 或文件路径。
 4. 验证置顶、静音、通知策略、窗口拖动缩放和布局持久化。

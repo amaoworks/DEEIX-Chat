@@ -1,4 +1,7 @@
-# Optional overlay: docker compose -f docker-compose.yml -f docker-compose.vocechat.yml up -d
+# Optional overlay. Stack on any root profile:
+#   docker compose -f docker-compose.yml -f docker-compose.vocechat.yml up -d
+#   docker compose -f docker-compose.sqlite.yml -f docker-compose.vocechat.yml up -d
+#   docker compose -f docker-compose.full.yml -f docker-compose.vocechat.yml up -d
 # VoceChat has no host port. Only the DEEIX backend can reach it on this network.
 services:
   app:
