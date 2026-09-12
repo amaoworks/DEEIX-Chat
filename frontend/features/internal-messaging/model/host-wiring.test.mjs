@@ -61,3 +61,20 @@ test("launcher and complete window share one event-stream implementation", () =>
 test("emoji picker renders above the floating messaging window", () => {
   assert.equal(hostSource.includes('className="z-[80]'), true);
 });
+
+test("title-bar actions use portaled tooltips above the messaging window", () => {
+  assert.equal(hostSource.includes("@/components/ui/tooltip"), true);
+  assert.equal(hostSource.includes("HeaderIconButton"), true);
+  assert.equal(hostSource.includes("notificationButtonState("), true);
+});
+
+test("message timestamps appear beside the bubble on hover instead of under the text", () => {
+  assert.equal(hostSource.includes("formatMessageHoverLabel("), true);
+  assert.equal(hostSource.includes("{formatTime(message.createdAt, locale)}"), false);
+  assert.equal(hostSource.includes("formatTime(conversation.lastMessageAt, locale)"), true);
+  assert.equal(
+    hostSource.includes("@/features/internal-messaging/model/message-time") ||
+      hostSource.includes("../model/message-time"),
+    true,
+  );
+});

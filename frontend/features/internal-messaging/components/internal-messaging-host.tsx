@@ -33,6 +33,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { CachedConversation } from "@/features/internal-messaging/model/conversation-cache";
 import {
   createCachedConversation,
@@ -70,6 +71,12 @@ import { useConversationList } from "./use-conversation-list";
 import { useMessageReadState } from "./use-message-read-state";
 import { useMessageComposer } from "./use-message-composer";
 import { shouldSendOnEnter } from "../model/message-composer";
+import {
+  formatMessageHoverLabel,
+  formatTime,
+  notificationButtonState,
+  type NotificationPermissionState,
+} from "../model/message-time";
 
 const LazyInternalMessageMarkdown = React.lazy(async () => {
   const module = await import("./internal-message-markdown");
@@ -112,15 +119,6 @@ function displayName(user: InternalMessagingUser) {
   return user.displayName || user.username;
 }
 
-function formatTime(value: string, locale: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(locale, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
 export function InternalMessagingWindowHost({
   initiallyOpen = false,
   initialStatus,
@@ -160,6 +158,9 @@ export function InternalMessagingWindowHost({
   const [messageSearchResults, setMessageSearchResults] = React.useState<InternalMessagingMessage[]>([]);
   const [searchingMessages, setSearchingMessages] = React.useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(false);
+  const [notificationPermission, setNotificationPermission] =
+    React.useState<NotificationPermissionState>("default");
+  const [revealedTimestampID, setRevealedTimestampID] = React.useState<number | null>(null);
   const [directoryError, setDirectoryError] = React.useState("");
   const [messageError, setMessageError] = React.useState("");
   const [actionError, setActionError] = React.useState("");
@@ -282,6 +283,37 @@ export function InternalMessagingWindowHost({
       setNotificationsEnabled(window.localStorage.getItem(`${NOTIFICATION_STORAGE_PREFIX}:${user?.publicID}`) === "true");
     } catch { setNotificationsEnabled(false); }
   }, [user?.publicID]);
+
+  React.useEffect(() => {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      return;
+    }
+    setNotificationPermission(Notification.permission);
+    if (!navigator.permissions?.query) return;
+    let disposed = false;
+    let status: PermissionStatus | undefined;
+    const sync = () => {
+      if (!disposed && "Notification" in window) {
+        setNotificationPermission(Notification.permission);
+      }
+    };
+    void navigator.permissions
+      .query({ name: "notifications" })
+      .then((result) => {
+        if (disposed) return;
+        status = result;
+        sync();
+        result.addEventListener("change", sync);
+      })
+      .catch(() => {
+        // Safari and some embedded browsers reject the notifications permission query.
+      });
+    return () => {
+      disposed = true;
+      status?.removeEventListener("change", sync);
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!browserNotificationsAllowed) setNotificationsEnabled(false);
@@ -610,14 +642,25 @@ export function InternalMessagingWindowHost({
     setMessageSearchQuery("");
     setMessageSearchResults([]);
     setMessageFocusRequest(null);
-
+    setRevealedTimestampID(null);
   };
+
+  const notificationState = notificationButtonState({
+    adminAllowed: browserNotificationsAllowed,
+    permission: notificationPermission,
+    enabled: notificationsEnabled,
+  });
 
   const toggleNotifications = async () => {
     if (!user?.publicID || !browserNotificationsAllowed || !("Notification" in window)) return;
-    let next = !notificationsEnabled;
+    if (Notification.permission === "denied") return;
+    const currentlyActive =
+      notificationsEnabled && Notification.permission === "granted";
+    let next = !currentlyActive;
     if (next && Notification.permission !== "granted") {
-      next = (await Notification.requestPermission()) === "granted";
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      next = permission === "granted";
     }
     setNotificationsEnabled(next);
     window.localStorage.setItem(
@@ -819,14 +862,9 @@ export function InternalMessagingWindowHost({
             onPointerCancel={stopWindowDrag}
           >
             {selected ? (
-              <Button
-                aria-label={t("aria.back")}
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setSelected(null)}
-              >
+              <HeaderIconButton label={t("aria.back")} onClick={() => setSelected(null)}>
                 <ChevronLeft />
-              </Button>
+              </HeaderIconButton>
             ) : (
               <MessageCircle className="size-4 text-primary" />
             )}
@@ -842,31 +880,32 @@ export function InternalMessagingWindowHost({
                   : t(mobileLayout ? "mobileHint" : "dragHint")}
               </p>
             </div>
-            {!mobileLayout ? <Button aria-label={t(expanded ? "aria.restore" : "aria.expand")} variant="ghost" size="icon-sm" onClick={() => setExpanded((value) => !value)}><Maximize2 /></Button> : null}
+            {!mobileLayout ? (
+              <HeaderIconButton
+                label={t(expanded ? "aria.restore" : "aria.expand")}
+                onClick={() => setExpanded((value) => !value)}
+              >
+                <Maximize2 />
+              </HeaderIconButton>
+            ) : null}
             {selected ? (
-              <Button
-                aria-label={t("aria.search")}
-                variant="ghost"
-                size="icon-sm"
+              <HeaderIconButton
+                label={t("aria.search")}
                 onClick={() => setMessageSearchOpen((current) => !current)}
               >
                 <Search />
-              </Button>
+              </HeaderIconButton>
             ) : null}
-            <Button
-              aria-label={
-                notificationsEnabled ? t("aria.notificationsOn") : t("aria.notificationsOff")
-              }
-              variant="ghost"
-              size="icon-sm"
-              disabled={!browserNotificationsAllowed}
+            <HeaderIconButton
+              label={t(`aria.${notificationState.tooltipKey}`)}
+              disabled={notificationState.disabled}
               onClick={() => void toggleNotifications()}
             >
-              {notificationsEnabled ? <Bell /> : <BellOff />}
-            </Button>
-            <Button aria-label={t("aria.close")} variant="ghost" size="icon-sm" onClick={close}>
+              {notificationState.active ? <Bell /> : <BellOff />}
+            </HeaderIconButton>
+            <HeaderIconButton label={t("aria.close")} onClick={close}>
               <X />
-            </Button>
+            </HeaderIconButton>
           </header>
 
           {!connected ? <p role="status" className="border-b bg-muted px-3 py-2 text-xs">{t("connection.reconnecting")}</p> : null}
@@ -982,10 +1021,19 @@ export function InternalMessagingWindowHost({
                   >
                     {(message) => {
                     const mine = message.fromUserPublicID === user.publicID;
+                    const hoverTime = formatMessageHoverLabel(
+                      message.createdAt,
+                      locale,
+                      {
+                        yesterday: t("time.yesterday"),
+                        edited: t("messages.edited"),
+                      },
+                      Boolean(message.editedAt && !message.deleted),
+                    );
                     return (
                       <div
                         id={`internal-message-${message.id}`}
-                        className={cn("flex", mine ? "justify-end" : "justify-start")}
+                        className={cn("flex w-full", mine ? "justify-end" : "justify-start")}
                         style={messageRowContainmentStyle({
                           loadingOlderMessages,
                           preservingOlderScroll:
@@ -993,11 +1041,21 @@ export function InternalMessagingWindowHost({
                         })}
                       >
                         <div
-                          className={cn(
-                            "group/message relative max-w-[85%] rounded-2xl px-3 py-2 text-sm",
-                            mine ? "bg-primary text-primary-foreground" : "bg-muted",
-                          )}
+                          className="group/message relative max-w-[min(85%,calc(100%-6.75rem))]"
+                          onPointerUp={(event) => {
+                            if (event.pointerType === "mouse") return;
+                            if ((event.target as HTMLElement).closest("button, a")) return;
+                            setRevealedTimestampID((current) =>
+                              current === message.id ? null : message.id,
+                            );
+                          }}
                         >
+                          <div
+                            className={cn(
+                              "rounded-2xl px-3 py-2 text-sm",
+                              mine ? "bg-primary text-primary-foreground" : "bg-muted",
+                            )}
+                          >
                           {message.replyToID > 0 ? (
                             <div
                               className={cn(
@@ -1044,15 +1102,23 @@ export function InternalMessagingWindowHost({
                               </React.Suspense>
                             )}
                           </MessageRenderBoundary>
-                          <p
-                            className={cn(
-                              "mt-1 text-[10px]",
-                              mine ? "text-primary-foreground/70" : "text-muted-foreground",
-                            )}
-                          >
-                            {message.editedAt ? t("messages.edited") : ""}
-                            {formatTime(message.createdAt, locale)}
-                          </p>
+                          </div>
+                          {hoverTime ? (
+                            <time
+                              dateTime={message.createdAt}
+                              className={cn(
+                                "pointer-events-none absolute bottom-1 max-w-[6.75rem] text-[10px] leading-tight text-muted-foreground transition-opacity",
+                                revealedTimestampID === message.id
+                                  ? "opacity-100"
+                                  : "opacity-0 group-hover/message:opacity-100 group-focus-within/message:opacity-100",
+                                mine
+                                  ? "right-full mr-1.5 text-right"
+                                  : "left-full ml-1.5 text-left",
+                              )}
+                            >
+                              {hoverTime}
+                            </time>
+                          ) : null}
                           {!message.deleted ? (
                             <span
                             className={cn(
@@ -1304,9 +1370,27 @@ export function InternalMessagingWindowHost({
                                 <span className="truncate text-sm font-medium">
                                   {displayName(item)}
                                 </span>
-                                {conversation.pinned ? <Pin className="size-3 text-primary" /> : null}
+                                {conversation.pinned ? (
+                                  <IconTooltip label={t("aria.pinned")}>
+                                    <span
+                                      className="inline-flex"
+                                      role="img"
+                                      aria-label={t("aria.pinned")}
+                                    >
+                                      <Pin className="size-3 text-primary" />
+                                    </span>
+                                  </IconTooltip>
+                                ) : null}
                                 {conversation.muted ? (
-                                  <VolumeX className="size-3 text-muted-foreground" />
+                                  <IconTooltip label={t("aria.muted")}>
+                                    <span
+                                      className="inline-flex"
+                                      role="img"
+                                      aria-label={t("aria.muted")}
+                                    >
+                                      <VolumeX className="size-3 text-muted-foreground" />
+                                    </span>
+                                  </IconTooltip>
                                 ) : null}
                               </span>
                               <span className="block truncate text-xs text-muted-foreground">
@@ -1325,38 +1409,46 @@ export function InternalMessagingWindowHost({
                             </span>
                           </button>
                           <span className="mr-1 hidden shrink-0 group-hover/conversation:flex group-focus-within/conversation:flex max-sm:flex">
-                            <button
-                              type="button"
-                              aria-label={
-                                conversation.pinned ? t("aria.unpin") : t("aria.pin")
-                              }
-                              className="rounded p-1 hover:bg-background"
-                              onClick={() =>
-                                void updateConversationPreference(conversation, {
-                                  pinned: !conversation.pinned,
-                                })
-                              }
+                            <IconTooltip
+                              label={conversation.pinned ? t("aria.unpin") : t("aria.pin")}
                             >
-                              <Pin className="size-3" />
-                            </button>
-                            <button
-                              type="button"
-                              aria-label={
-                                conversation.muted ? t("aria.unmute") : t("aria.mute")
-                              }
-                              className="rounded p-1 hover:bg-background"
-                              onClick={() =>
-                                void updateConversationPreference(conversation, {
-                                  muted: !conversation.muted,
-                                })
-                              }
+                              <button
+                                type="button"
+                                aria-label={
+                                  conversation.pinned ? t("aria.unpin") : t("aria.pin")
+                                }
+                                className="rounded p-1 hover:bg-background"
+                                onClick={() =>
+                                  void updateConversationPreference(conversation, {
+                                    pinned: !conversation.pinned,
+                                  })
+                                }
+                              >
+                                <Pin className="size-3" />
+                              </button>
+                            </IconTooltip>
+                            <IconTooltip
+                              label={conversation.muted ? t("aria.unmute") : t("aria.mute")}
                             >
-                              {conversation.muted ? (
-                                <Volume2 className="size-3" />
-                              ) : (
-                                <VolumeX className="size-3" />
-                              )}
-                            </button>
+                              <button
+                                type="button"
+                                aria-label={
+                                  conversation.muted ? t("aria.unmute") : t("aria.mute")
+                                }
+                                className="rounded p-1 hover:bg-background"
+                                onClick={() =>
+                                  void updateConversationPreference(conversation, {
+                                    muted: !conversation.muted,
+                                  })
+                                }
+                              >
+                                {conversation.muted ? (
+                                  <Volume2 className="size-3" />
+                                ) : (
+                                  <VolumeX className="size-3" />
+                                )}
+                              </button>
+                            </IconTooltip>
                           </span>
                         </div>
                       );
@@ -1607,6 +1699,56 @@ function PresenceIndicator({ online, label }: { online: boolean; label: string }
         online ? "bg-emerald-500" : "bg-muted-foreground/50",
       )}
     />
+  );
+}
+
+function HeaderIconButton({
+  label,
+  disabled,
+  onClick,
+  children,
+}: {
+  label: string;
+  disabled?: boolean;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Tooltip delayDuration={200}>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <Button
+            aria-label={label}
+            variant="ghost"
+            size="icon-sm"
+            disabled={disabled}
+            onClick={onClick}
+          >
+            {children}
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent className="pointer-events-none z-[80]" side="bottom" sideOffset={6}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+function IconTooltip({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactElement;
+}) {
+  return (
+    <Tooltip delayDuration={200}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent className="pointer-events-none z-[80]" side="top" sideOffset={6}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

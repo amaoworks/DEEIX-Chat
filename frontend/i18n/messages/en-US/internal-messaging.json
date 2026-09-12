@@ -7,6 +7,9 @@
     "search": "Search messages",
     "notificationsOn": "Disable notifications",
     "notificationsOff": "Enable notifications",
+    "notificationsDisabled": "Browser notifications are disabled by the administrator",
+    "notificationsDenied": "Allow notifications in your browser settings",
+    "notificationsUnsupported": "This browser does not support desktop notifications",
     "close": "Close messages",
     "dismissError": "Dismiss error",
     "cancelAction": "Cancel message action",
@@ -19,6 +22,8 @@
     "unpin": "Unpin conversation",
     "mute": "Mute conversation",
     "unmute": "Unmute conversation",
+    "muted": "Muted",
+    "pinned": "Pinned",
     "imagePreview": "Image preview",
     "closePreview": "Close image preview",
     "expand": "Expand messaging window",
@@ -61,7 +66,7 @@
     "renderError": "This message could not be displayed.",
     "olderReply": "Reply to an earlier message",
     "deleted": "Message recalled",
-    "edited": "Edited · ",
+    "edited": "Edited",
     "copy": "Copy",
     "reply": "Reply",
     "edit": "Edit",
@@ -96,5 +101,8 @@
   },
   "connection": {
     "reconnecting": "Connecting to messaging. Messages may be delayed…"
+  },
+  "time": {
+    "yesterday": "Yesterday"
   }
 }

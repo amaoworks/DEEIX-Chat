@@ -7,6 +7,9 @@
     "search": "搜索消息",
     "notificationsOn": "关闭通知",
     "notificationsOff": "开启通知",
+    "notificationsDisabled": "浏览器通知已被管理员关闭",
+    "notificationsDenied": "请在浏览器设置中允许通知",
+    "notificationsUnsupported": "当前浏览器不支持桌面通知",
     "close": "关闭站内消息",
     "dismissError": "关闭错误提示",
     "cancelAction": "取消消息操作",
@@ -19,6 +22,8 @@
     "unpin": "取消置顶",
     "mute": "静音会话",
     "unmute": "取消静音",
+    "muted": "已静音",
+    "pinned": "已置顶",
     "imagePreview": "图片预览",
     "closePreview": "关闭图片预览",
     "expand": "展开聊天窗口",
@@ -61,7 +66,7 @@
     "renderError": "这条消息暂时无法显示。",
     "olderReply": "回复较早的消息",
     "deleted": "消息已撤回",
-    "edited": "已编辑 · ",
+    "edited": "已编辑",
     "copy": "复制",
     "reply": "回复",
     "edit": "编辑",
@@ -96,5 +101,8 @@
   },
   "connection": {
     "reconnecting": "正在连接聊天服务，消息可能延迟…"
+  },
+  "time": {
+    "yesterday": "昨天"
   }
 }
