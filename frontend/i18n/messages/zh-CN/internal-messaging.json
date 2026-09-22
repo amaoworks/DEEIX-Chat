@@ -80,6 +80,11 @@
     "retry": "重试",
     "discard": "移除"
   },
+  "emoji": {
+    "previousPage": "上一页表情",
+    "nextPage": "下一页表情",
+    "page": "{current} / {total}"
+  },
   "composer": {
     "editing": "编辑消息",
     "replying": "回复：{content}",

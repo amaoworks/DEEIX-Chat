@@ -7,6 +7,7 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  ChevronRight,
   Clipboard,
   CornerUpLeft,
   Download,
@@ -109,12 +110,21 @@ class MessageRenderBoundary extends React.Component<
 
 const NOTIFICATION_STORAGE_PREFIX = "deeix.internal-messaging.notifications.v1";
 const MESSAGE_BOTTOM_THRESHOLD = 80;
-const COMMON_EMOJIS = [
-  "😀", "😃", "😄", "😁", "😂", "😊", "😍", "🥰",
-  "😘", "😎", "🤔", "😅", "😭", "😡", "🥳", "🤩",
-  "👍", "👎", "👏", "🙏", "💪", "👌", "✌️", "🤝",
-  "❤️", "💔", "🔥", "🎉", "✨", "💯", "✅", "🚀",
-];
+const MessagingWindowOpenContext = React.createContext(false);
+const EMOJI_PAGES = [
+  [
+    "😀", "😃", "😄", "😁", "😂", "😊", "😍", "🥰",
+    "😘", "😎", "🤔", "😅", "😭", "😡", "🥳", "🤩",
+    "👍", "👎", "👏", "🙏", "💪", "👌", "✌️", "🤝",
+    "❤️", "💔", "🔥", "🎉", "✨", "💯", "✅", "🚀",
+  ],
+  [
+    "🙃", "😉", "😌", "😋", "😜", "🤗", "🤭", "🤫",
+    "🤨", "🧐", "😏", "😴", "🤤", "🤯", "🥺", "😱",
+    "😳", "🥶", "🥵", "🤢", "🤮", "🤧", "🤒", "🤕",
+    "👀", "🙈", "🙉", "🙊", "🐱", "🐶", "☕", "🎂",
+  ],
+] as const;
 
 function initials(value: string) {
   return value.trim().slice(0, 2).toUpperCase() || "?";
@@ -131,10 +141,24 @@ const MessagingAvatar = React.memo(function MessagingAvatar({
   user: InternalMessagingUser;
   className?: string;
 }) {
+  const imageSrc = resolveAvatarImageSrc(user.avatarURL, user) || undefined;
+  const [failedImageSrc, setFailedImageSrc] = React.useState<string>();
+  const showInitials = !imageSrc || failedImageSrc === imageSrc;
+
   return (
     <Avatar className={className}>
-      <AvatarImage src={resolveAvatarImageSrc(user.avatarURL, user) || undefined} alt={displayName(user)} className="object-cover" />
-      <AvatarFallback>{initials(displayName(user))}</AvatarFallback>
+      <AvatarImage
+        src={imageSrc}
+        alt={displayName(user)}
+        className="object-cover"
+        onLoadingStatusChange={(status) => {
+          if (status === "error") setFailedImageSrc(imageSrc);
+          if (status === "loaded") setFailedImageSrc(undefined);
+        }}
+      />
+      <AvatarFallback>
+        {showInitials ? initials(displayName(user)) : null}
+      </AvatarFallback>
     </Avatar>
   );
 });
@@ -191,6 +215,7 @@ export function InternalMessagingWindowHost({
   const [previewMessage, setPreviewMessage] =
     React.useState<InternalMessagingMessage | null>(null);
   const [emojiPickerOpen, setEmojiPickerOpen] = React.useState(false);
+  const [emojiPage, setEmojiPage] = React.useState(0);
   const [connected, setConnected] = React.useState(false);
   const [presenceReady, setPresenceReady] = React.useState(false);
   const [onlineByUser, setOnlineByUser] = React.useState<Record<string, boolean>>({});
@@ -1012,7 +1037,7 @@ export function InternalMessagingWindowHost({
   if (!enabled || !user) return null;
 
   return (
-    <>
+    <MessagingWindowOpenContext value={open}>
         <aside
           ref={windowRef}
           inert={!open}
@@ -1021,7 +1046,8 @@ export function InternalMessagingWindowHost({
           className={cn(
             "fixed z-[70] flex min-h-0 flex-col overflow-hidden bg-background shadow-2xl overscroll-contain",
             mobileLayout ? "inset-0 rounded-none border-0" : "rounded-2xl border",
-            !open && "invisible pointer-events-none",
+            // Hide the entire subtree immediately, including buttons that transition visibility.
+            !open && "invisible pointer-events-none opacity-0",
           )}
           style={
             mobileLayout
@@ -1456,18 +1482,45 @@ export function InternalMessagingWindowHost({
                       }}
                       side="top"
                       align="start"
-                      className="z-[80] grid w-64 grid-cols-8 gap-1 p-2"
+                      className="z-[80] w-64 p-2"
                     >
-                      {COMMON_EMOJIS.map((emoji) => (
-                        <button
+                      <div className="grid grid-cols-8 gap-1">
+                        {EMOJI_PAGES[emojiPage].map((emoji) => (
+                          <button
+                            type="button"
+                            key={emoji}
+                            className="flex h-7 w-full items-center justify-center rounded text-lg hover:bg-accent focus-visible:bg-accent"
+                            onClick={() => insertEmoji(emoji)}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 flex items-center justify-between border-t pt-2">
+                        <Button
                           type="button"
-                          key={emoji}
-                          className="flex size-7 items-center justify-center rounded text-lg hover:bg-accent"
-                          onClick={() => insertEmoji(emoji)}
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={t("emoji.previousPage")}
+                          disabled={emojiPage === 0}
+                          onClick={() => setEmojiPage((page) => Math.max(0, page - 1))}
                         >
-                          {emoji}
-                        </button>
-                      ))}
+                          <ChevronLeft />
+                        </Button>
+                        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+                          {t("emoji.page", { current: emojiPage + 1, total: EMOJI_PAGES.length })}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={t("emoji.nextPage")}
+                          disabled={emojiPage === EMOJI_PAGES.length - 1}
+                          onClick={() => setEmojiPage((page) => Math.min(EMOJI_PAGES.length - 1, page + 1))}
+                        >
+                          <ChevronRight />
+                        </Button>
+                      </div>
                     </PopoverContent>
                   </Popover>
                   <Textarea
@@ -1773,7 +1826,7 @@ export function InternalMessagingWindowHost({
           onOpen={() => setOpen(true)}
         />
       ) : null}
-    </>
+    </MessagingWindowOpenContext>
   );
 }
 
@@ -1921,6 +1974,7 @@ function HeaderIconButton({
   onClick?: () => void;
   children: React.ReactNode;
 }) {
+  const windowOpen = React.useContext(MessagingWindowOpenContext);
   return (
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>
@@ -1936,9 +1990,11 @@ function HeaderIconButton({
           </Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent className="pointer-events-none z-[80]" side="bottom" sideOffset={6}>
-        {label}
-      </TooltipContent>
+      {windowOpen ? (
+        <TooltipContent className="pointer-events-none z-[80]" side="bottom" sideOffset={6}>
+          {label}
+        </TooltipContent>
+      ) : null}
     </Tooltip>
   );
 }
@@ -1950,12 +2006,15 @@ function IconTooltip({
   label: string;
   children: React.ReactElement;
 }) {
+  const windowOpen = React.useContext(MessagingWindowOpenContext);
   return (
     <Tooltip delayDuration={200}>
       <TooltipTrigger asChild>{children}</TooltipTrigger>
-      <TooltipContent className="pointer-events-none z-[80]" side="top" sideOffset={6}>
-        {label}
-      </TooltipContent>
+      {windowOpen ? (
+        <TooltipContent className="pointer-events-none z-[80]" side="top" sideOffset={6}>
+          {label}
+        </TooltipContent>
+      ) : null}
     </Tooltip>
   );
 }

@@ -80,6 +80,11 @@
     "retry": "Retry",
     "discard": "Dismiss"
   },
+  "emoji": {
+    "previousPage": "Previous emoji page",
+    "nextPage": "Next emoji page",
+    "page": "{current} / {total}"
+  },
   "composer": {
     "editing": "Edit message",
     "replying": "Reply: {content}",
