@@ -12,7 +12,7 @@ import (
 	domainknowledgebase "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/knowledgebase"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/dberror"
-	models "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/models"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/models"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/sqlitevec"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/vectorutil"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
@@ -857,7 +857,7 @@ func (r *Repo) UpdateConversationStatefulResponse(ctx context.Context, conversat
 		Error)
 }
 
-// UpdateConversationModel 更新会话当前使用模型与提供商。
+// UpdateConversationModel 更新会话当前使用模型与提供方。
 func (r *Repo) UpdateConversationModel(ctx context.Context, conversationID uint, platformModelName string, provider string) error {
 	return dberror.Translate(r.db.WithContext(ctx).
 		Model(&models.Conversation{}).
@@ -1123,8 +1123,8 @@ func (r *Repo) UpdateMessageState(
 		Error)
 }
 
-// UpdateAssistantMessageContent 更新当前用户 assistant 消息正文并标记编辑时间。
-func (r *Repo) UpdateAssistantMessageContent(
+// UpdateMessageContent 更新当前用户 user/assistant 消息正文并标记编辑时间。
+func (r *Repo) UpdateMessageContent(
 	ctx context.Context,
 	userID uint,
 	publicID string,
@@ -1139,7 +1139,7 @@ func (r *Repo) UpdateAssistantMessageContent(
 	var item models.Message
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.
-			Where("user_id = ? AND public_id = ? AND role = ?", userID, normalizedPublicID, "assistant").
+			Where("user_id = ? AND public_id = ? AND role IN ?", userID, normalizedPublicID, []string{"user", "assistant"}).
 			First(&item).Error; err != nil {
 			return err
 		}
@@ -1266,6 +1266,9 @@ func (r *Repo) UpdateAssistantMessageCompletion(
 	if update.KnowledgeSources != nil {
 		updates["knowledge_sources_json"] = marshalMessageKnowledgeSources(update.KnowledgeSources)
 	}
+	if update.ReasoningEffort != nil {
+		updates["reasoning_effort"] = *update.ReasoningEffort
+	}
 	return dberror.Translate(r.db.WithContext(ctx).
 		Model(&models.Message{}).
 		Where("id = ?", messageID).
@@ -1343,6 +1346,9 @@ func (r *Repo) CompleteAssistantMessageWithAttachments(
 		if assistantCompletion.KnowledgeSources != nil {
 			updates["knowledge_sources_json"] = marshalMessageKnowledgeSources(assistantCompletion.KnowledgeSources)
 		}
+		if assistantCompletion.ReasoningEffort != nil {
+			updates["reasoning_effort"] = *assistantCompletion.ReasoningEffort
+		}
 		return tx.Model(&models.Message{}).
 			Where("id = ?", assistantMessageID).
 			Updates(updates).Error
@@ -1399,6 +1405,9 @@ func (r *Repo) CompleteAssistantMessageWithGeneratedAttachments(
 		}
 		if assistantCompletion.KnowledgeSources != nil {
 			updates["knowledge_sources_json"] = marshalMessageKnowledgeSources(assistantCompletion.KnowledgeSources)
+		}
+		if assistantCompletion.ReasoningEffort != nil {
+			updates["reasoning_effort"] = *assistantCompletion.ReasoningEffort
 		}
 		return tx.Model(&models.Message{}).
 			Where("id = ?", assistantMessageID).
@@ -1783,6 +1792,7 @@ func (r *Repo) UpdateConversationRun(ctx context.Context, item *domainconversati
 			"cache_read_tokens",
 			"cache_write_tokens",
 			"reasoning_tokens",
+			"reasoning_effort",
 			"tool_calls_count",
 			"first_token_latency_ms",
 			"total_latency_ms",
@@ -1919,7 +1929,7 @@ func (r *Repo) ListConversationMessageTraceEventsByMessageIDs(ctx context.Contex
 	return toConversationMessageTraceEventDomains(items), nil
 }
 
-// CreateConversationToolCalls 批量写入工具调用日志。
+// CreateConversationToolCall 写入单条工具调用日志，并回填 ID 与时间戳。
 func (r *Repo) CreateConversationToolCall(ctx context.Context, item *domainconversation.ToolCall) error {
 	if item == nil {
 		return nil
@@ -1934,6 +1944,7 @@ func (r *Repo) CreateConversationToolCall(ctx context.Context, item *domainconve
 	return nil
 }
 
+// CreateConversationToolCalls 批量写入工具调用日志。
 func (r *Repo) CreateConversationToolCalls(ctx context.Context, items []domainconversation.ToolCall) error {
 	if len(items) == 0 {
 		return nil
@@ -2636,112 +2647,112 @@ func buildSingleFileKindWhereClause(filterKind string) (string, []any) {
 		return "(LOWER(mime_type) = ? OR LOWER(file_name) LIKE ?)", []any{"application/pdf", "%.pdf"}
 	case "spreadsheet":
 		return "(" + strings.Join([]string{
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-			}, " OR ") + ")", []any{
-				"%spreadsheet%",
-				"%excel%",
-				"%csv%",
-				"%.xls",
-				"%.xlsx",
-				"%.csv",
-				"%.ods",
-			}
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+		}, " OR ") + ")", []any{
+			"%spreadsheet%",
+			"%excel%",
+			"%csv%",
+			"%.xls",
+			"%.xlsx",
+			"%.csv",
+			"%.ods",
+		}
 	case "presentation":
 		return "(" + strings.Join([]string{
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-			}, " OR ") + ")", []any{
-				"%presentation%",
-				"%powerpoint%",
-				"%.ppt",
-				"%.pptx",
-				"%.odp",
-			}
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+		}, " OR ") + ")", []any{
+			"%presentation%",
+			"%powerpoint%",
+			"%.ppt",
+			"%.pptx",
+			"%.odp",
+		}
 	case "document":
 		return "(" + strings.Join([]string{
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-			}, " OR ") + ")", []any{
-				"%word%",
-				"%rtf%",
-				"%opendocument.text%",
-				"%.doc",
-				"%.docx",
-				"%.rtf",
-				"%.odt",
-				"%.pages",
-			}
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+		}, " OR ") + ")", []any{
+			"%word%",
+			"%rtf%",
+			"%opendocument.text%",
+			"%.doc",
+			"%.docx",
+			"%.rtf",
+			"%.odt",
+			"%.pages",
+		}
 	case "code":
 		return "(" + strings.Join([]string{
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(mime_type) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-				"LOWER(file_name) LIKE ?",
-			}, " OR ") + ")", []any{
-				"text/%",
-				"%json%",
-				"%javascript%",
-				"%typescript%",
-				"%xml%",
-				"%html%",
-				"%css%",
-				"%yaml%",
-				"%toml%",
-				"%sql%",
-				"%markdown%",
-				"%.js",
-				"%.jsx",
-				"%.ts",
-				"%.tsx",
-				"%.json",
-				"%.html",
-				"%.css",
-				"%.md",
-				"%.xml",
-				"%.yaml",
-				"%.yml",
-				"%.toml",
-				"%.sql",
-				"%.sh",
-				"%.py",
-			}
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(mime_type) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+			"LOWER(file_name) LIKE ?",
+		}, " OR ") + ")", []any{
+			"text/%",
+			"%json%",
+			"%javascript%",
+			"%typescript%",
+			"%xml%",
+			"%html%",
+			"%css%",
+			"%yaml%",
+			"%toml%",
+			"%sql%",
+			"%markdown%",
+			"%.js",
+			"%.jsx",
+			"%.ts",
+			"%.tsx",
+			"%.json",
+			"%.html",
+			"%.css",
+			"%.md",
+			"%.xml",
+			"%.yaml",
+			"%.yml",
+			"%.toml",
+			"%.sql",
+			"%.sh",
+			"%.py",
+		}
 	default:
 		return "", nil
 	}
@@ -3209,6 +3220,7 @@ type fileChunkSearchRow struct {
 	ChunkIndex int       `gorm:"column:chunk_index"`
 	PageNum    int       `gorm:"column:page_num"`
 	CharOffset int       `gorm:"column:char_offset"`
+	Modality   string    `gorm:"column:modality"`
 	Content    string    `gorm:"column:content"`
 	TokenCount int       `gorm:"column:token_count"`
 	CreatedAt  time.Time `gorm:"column:created_at"`
@@ -3270,9 +3282,9 @@ func (r *Repo) searchSQLiteFileChunks(ctx context.Context, userID uint, fileObjI
 	if len(uniqueFileObjIDs) == 0 {
 		return nil, nil
 	}
-	// sqlite-vec applies k before the outer JOIN predicates. Resolve the allowed
-	// file IDs first so unauthorized nearest neighbours cannot displace valid
-	// candidates from the virtual-table result window.
+	// sqlite-vec 会在外层 JOIN 谓词之前应用 k。因此先解析允许的
+	// 文件 ID，避免无权访问的近邻挤占虚拟表结果窗口中的
+	// 有效候选。
 	authorizedFileObjIDs := make([]uint, 0, len(uniqueFileObjIDs))
 	if err := r.db.WithContext(ctx).Table("file_chunks").
 		Distinct("file_chunks.file_obj_id").
@@ -3296,7 +3308,7 @@ func (r *Repo) searchSQLiteFileChunks(ctx context.Context, userID uint, fileObjI
 	var rows []fileChunkSearchRow
 	query := fmt.Sprintf(`
 		SELECT chunks.id, chunks.file_obj_id, chunks.user_id, chunks.chunk_index, chunks.page_num,
-		       chunks.char_offset, chunks.content, chunks.token_count, chunks.created_at,
+		       chunks.char_offset, chunks.modality, chunks.content, chunks.token_count, chunks.created_at,
 		       (1.0 - vectors.distance) AS similarity
 		FROM %s AS vectors
 		JOIN "file_chunks" AS chunks
@@ -3343,6 +3355,7 @@ func (r *Repo) searchSQLiteFileChunks(ctx context.Context, userID uint, fileObjI
 				ChunkIndex: row.ChunkIndex,
 				PageNum:    row.PageNum,
 				CharOffset: row.CharOffset,
+				Modality:   row.Modality,
 				Content:    row.Content,
 				TokenCount: row.TokenCount,
 				CreatedAt:  row.CreatedAt,
@@ -3395,7 +3408,7 @@ func (r *Repo) SearchFileChunks(ctx context.Context, userID uint, fileObjIDs []u
 			LIMIT ?
 		)
 		SELECT chunks.id, chunks.file_obj_id, chunks.user_id, chunks.chunk_index, chunks.page_num,
-		       chunks.char_offset, chunks.content, chunks.token_count, chunks.created_at,
+		       chunks.char_offset, chunks.modality, chunks.content, chunks.token_count, chunks.created_at,
 		       (1 - (%s <=> ?::vector(%d))) AS similarity
 		FROM file_chunks AS chunks
 		JOIN vector_candidates AS candidates ON candidates.id = chunks.id
@@ -3437,6 +3450,7 @@ func (r *Repo) SearchFileChunks(ctx context.Context, userID uint, fileObjIDs []u
 				ChunkIndex: row.ChunkIndex,
 				PageNum:    row.PageNum,
 				CharOffset: row.CharOffset,
+				Modality:   row.Modality,
 				Content:    row.Content,
 				TokenCount: row.TokenCount,
 				CreatedAt:  row.CreatedAt,
@@ -3465,7 +3479,7 @@ func (r *Repo) BM25SearchFileChunks(ctx context.Context, userID uint, fileObjIDs
 		return nil, nil
 	}
 	rawQuery := `
-		SELECT id, file_obj_id, user_id, chunk_index, page_num, char_offset, content, token_count, created_at,
+		SELECT id, file_obj_id, user_id, chunk_index, page_num, char_offset, modality, content, token_count, created_at,
 		       ts_rank(to_tsvector('simple', content), to_tsquery('simple', ?)) AS similarity
 		FROM file_chunks
 		WHERE file_obj_id IN ?
@@ -3506,6 +3520,7 @@ func (r *Repo) BM25SearchFileChunks(ctx context.Context, userID uint, fileObjIDs
 				ChunkIndex: row.ChunkIndex,
 				PageNum:    row.PageNum,
 				CharOffset: row.CharOffset,
+				Modality:   row.Modality,
 				Content:    row.Content,
 				TokenCount: row.TokenCount,
 				CreatedAt:  row.CreatedAt,
@@ -3554,6 +3569,7 @@ func (r *Repo) keywordSearchFileChunks(ctx context.Context, userID uint, fileObj
 				ChunkIndex: row.ChunkIndex,
 				PageNum:    row.PageNum,
 				CharOffset: row.CharOffset,
+				Modality:   row.Modality,
 				Content:    row.Content,
 				TokenCount: row.TokenCount,
 				CreatedAt:  row.CreatedAt,
@@ -3944,6 +3960,7 @@ func toMessageDomain(item models.Message) domainconversation.Message {
 		CacheReadTokens:          item.CacheReadTokens,
 		CacheWriteTokens:         item.CacheWriteTokens,
 		ReasoningTokens:          item.ReasoningTokens,
+		ReasoningEffort:          item.ReasoningEffort,
 		LatencyMS:                item.LatencyMS,
 		BilledCurrency:           item.BilledCurrency,
 		BilledNanousd:            item.BilledNanousd,
@@ -3996,6 +4013,7 @@ func toMessageModel(item *domainconversation.Message) models.Message {
 		CacheReadTokens:          item.CacheReadTokens,
 		CacheWriteTokens:         item.CacheWriteTokens,
 		ReasoningTokens:          item.ReasoningTokens,
+		ReasoningEffort:          item.ReasoningEffort,
 		LatencyMS:                item.LatencyMS,
 		BilledCurrency:           item.BilledCurrency,
 		BilledNanousd:            item.BilledNanousd,
@@ -4068,6 +4086,7 @@ func toConversationRunDomain(item models.ConversationRun) domainconversation.Run
 		CacheReadTokens:          item.CacheReadTokens,
 		CacheWriteTokens:         item.CacheWriteTokens,
 		ReasoningTokens:          item.ReasoningTokens,
+		ReasoningEffort:          item.ReasoningEffort,
 		ToolCallsCount:           item.ToolCallsCount,
 		FirstTokenLatencyMS:      item.FirstTokenLatencyMS,
 		TotalLatencyMS:           item.TotalLatencyMS,
@@ -4164,6 +4183,7 @@ func toConversationRunModel(item *domainconversation.Run) models.ConversationRun
 		CacheReadTokens:          item.CacheReadTokens,
 		CacheWriteTokens:         item.CacheWriteTokens,
 		ReasoningTokens:          item.ReasoningTokens,
+		ReasoningEffort:          item.ReasoningEffort,
 		ToolCallsCount:           item.ToolCallsCount,
 		FirstTokenLatencyMS:      item.FirstTokenLatencyMS,
 		TotalLatencyMS:           item.TotalLatencyMS,
@@ -4198,6 +4218,7 @@ type messageKnowledgeSourceRecord struct {
 	ChunkIndex int     `json:"chunk_index"`
 	Score      float32 `json:"score"`
 	Preview    string  `json:"preview"`
+	Modality   string  `json:"modality,omitempty"`
 }
 
 func marshalMessageKnowledgeSources(items []domainconversation.MessageKnowledgeSource) string {
@@ -4208,7 +4229,7 @@ func marshalMessageKnowledgeSources(items []domainconversation.MessageKnowledgeS
 	for _, item := range items {
 		records = append(records, messageKnowledgeSourceRecord{
 			FileName: item.FileName, FileID: item.FileID, ChunkIndex: item.ChunkIndex,
-			Score: item.Score, Preview: item.Preview,
+			Score: item.Score, Preview: item.Preview, Modality: item.Modality,
 		})
 	}
 	raw, err := json.Marshal(records)
@@ -4230,7 +4251,7 @@ func parseMessageKnowledgeSources(raw string) []domainconversation.MessageKnowle
 	for _, record := range records {
 		items = append(items, domainconversation.MessageKnowledgeSource{
 			FileName: record.FileName, FileID: record.FileID, ChunkIndex: record.ChunkIndex,
-			Score: record.Score, Preview: record.Preview,
+			Score: record.Score, Preview: record.Preview, Modality: record.Modality,
 		})
 	}
 	return items
@@ -4555,6 +4576,7 @@ func toFileChunkModel(item *domainconversation.FileChunk) models.FileChunk {
 		ChunkIndex:         item.ChunkIndex,
 		PageNum:            item.PageNum,
 		CharOffset:         item.CharOffset,
+		Modality:           item.Modality,
 		Content:            item.Content,
 		TokenCount:         item.TokenCount,
 		EmbeddingSignature: item.EmbeddingSignature,

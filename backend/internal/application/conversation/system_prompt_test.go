@@ -213,7 +213,7 @@ func TestResolveMessageSystemPromptInjectionAddsUIComponentsCatalog(t *testing.T
 
 	got := resolveMessageSystemPromptInjection(config.Config{UIComponentsEnabled: true}, route, "", requestPromptOptions{UIComponents: domainuicomponent.Builtin()})
 
-	for _, want := range []string{`<ui-components p="100" scope="request">`, "`deeix-ui`", "- card-grid：", "- data-table：", "- chart：", "props="} {
+	for _, want := range []string{`<ui-components p="100" scope="request">`, "`deeix-ui`", `<component name="card-grid">`, `<component name="data-table">`, `<component name="chart">`, "<props>"} {
 		if !strings.Contains(got.Content, want) {
 			t.Fatalf("expected content to contain %q, got %q", want, got.Content)
 		}

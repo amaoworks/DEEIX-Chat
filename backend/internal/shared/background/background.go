@@ -4,10 +4,14 @@ package background
 import (
 	"context"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// inflight 跟踪所有通过 Go 启动的任务，以便关闭时排空。
+var inflight sync.WaitGroup
 
 // Detach 保留父上下文中的值，同时让收尾工作不受请求取消或原截止时间影响。
 func Detach(parent context.Context) context.Context {
@@ -27,7 +31,9 @@ func Go(logger *zap.Logger, name string, fn func()) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
+	inflight.Add(1)
 	go func() {
+		defer inflight.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Error("background_task_panic",
@@ -39,4 +45,20 @@ func Go(logger *zap.Logger, name string, fn func()) {
 		}()
 		fn()
 	}()
+}
+
+// Wait 阻塞直到所有通过 Go 启动的任务返回或 ctx 到期。
+// 调用方应先取消任务的 context；Wait 仅限定排空的时长上限。
+func Wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

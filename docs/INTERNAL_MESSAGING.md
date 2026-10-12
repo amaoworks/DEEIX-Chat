@@ -12,6 +12,8 @@ DEEIX 使用自己的 UI 与 API；VoceChat 仅在 Docker 内网保存消息并�
 
 全量 Compose 已经内置 VoceChat，使用 GitHub Actions 发布的 `ghcr.io/amaoworks/deeix-chat-vocechat:latest` bundle 镜像。镜像包含 VoceChat 服务、`config.toml` 和 `init.py`，VoceChat 服务版本由镜像内部的构建配置控制，部署时使用 `latest` 即可，无需手工匹配发布 tag。部署主机不需要拉取仓库或本地构建。轻量安装和默认安装则需要叠加 `docker-compose.vocechat.yml`：
 
+以下生产 Compose 命令均在包含配置模板和 compose 文件的 `deploy/` 目录内执行。
+
 ```bash
 docker compose -f docker-compose.full.yml up -d
 ```
@@ -280,8 +282,8 @@ docker compose -f docker-compose.yml -f docker-compose.vocechat.yml restart app
 前端单元测试涵盖草稿隔离、失败后继续输入、原目标重试、输入法回车、已读条件、分页与取消、缓存、事件解析和重连退避。后端测试覆盖索引故障后重启恢复、不重复发送或累加未读、跨多页恢复、事件顺序保护、批量用户查询及流式附件转发。
 
 ```bash
-pnpm --dir frontend test:internal-messaging
-pnpm --dir frontend typecheck
+pnpm --dir apps/web test:internal-messaging
+pnpm --dir apps/web typecheck
 cd backend
 go test -race ./internal/application/internalmessaging ./internal/transport/http/internalmessaging ./internal/infra/integration/vocechat ./internal/infra/persistence/postgres/internalmessaging ./internal/infra/persistence/postgres/user
 go test ./internal/infra/integration/vocechat -run '^$' -bench BenchmarkUploadFileStream -benchmem

@@ -1,4 +1,4 @@
-package model
+package models
 
 import "time"
 
@@ -127,6 +127,7 @@ type Message struct {
 	CacheReadTokens          int64      `gorm:"not null;default:0;comment:缓存读取Token"`
 	CacheWriteTokens         int64      `gorm:"not null;default:0;comment:缓存写入Token"`
 	ReasoningTokens          int64      `gorm:"not null;default:0;comment:推理Token"`
+	ReasoningEffort          *string    `gorm:"size:16;comment:生效的规范推理档位(模型无推理能力时为空)"`
 	LatencyMS                int64      `gorm:"not null;default:0;comment:消息处理时长毫秒"`
 	BilledCurrency           string     `gorm:"size:16;not null;default:'USD';comment:消息计费币种"`
 	BilledNanousd            int64      `gorm:"not null;default:0;comment:消息计费金额(纳美元)"`
@@ -247,6 +248,7 @@ type FileChunk struct {
 	ChunkIndex         int       `gorm:"not null;default:0;comment:分片序号"`
 	PageNum            int       `gorm:"not null;default:0;comment:所在页码"`
 	CharOffset         int       `gorm:"not null;default:0;comment:字符偏移量"`
+	Modality           string    `gorm:"size:16;not null;default:'text';comment:向量输入模态(text/image)"`
 	Content            string    `gorm:"type:text;not null;comment:分片文本内容"`
 	TokenCount         int       `gorm:"not null;default:0;comment:估算token数"`
 	EmbeddingSignature string    `gorm:"size:64;not null;default:'';index:idx_file_chunks_embedding_signature;comment:Embedding模型与维度签名"`
@@ -297,6 +299,7 @@ type ConversationRun struct {
 	CacheReadTokens          int64      `gorm:"not null;default:0;comment:缓存读取Token"`
 	CacheWriteTokens         int64      `gorm:"not null;default:0;comment:缓存写入Token"`
 	ReasoningTokens          int64      `gorm:"not null;default:0;comment:推理Token"`
+	ReasoningEffort          *string    `gorm:"size:16;comment:生效的规范推理档位(模型无推理能力时为空)"`
 	ToolCallsCount           int        `gorm:"not null;default:0;comment:工具调用次数"`
 	FirstTokenLatencyMS      int64      `gorm:"not null;default:0;comment:首Token时延毫秒"`
 	TotalLatencyMS           int64      `gorm:"not null;default:0;comment:总时长毫秒"`

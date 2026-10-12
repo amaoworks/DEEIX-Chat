@@ -22,15 +22,15 @@ const (
 	legacyOfficialPricingField    = "legacy_cache"
 )
 
-// openRouterPricingIgnoredFields are provider-side charges that are handled by
-// another DEEIX billing path instead of the model token price.
+// openRouterPricingIgnoredFields 是由 DEEIX 其他计费路径处理、
+// 而非计入模型 token 价格的提供方侧费用。
 var openRouterPricingIgnoredFields = map[string]struct{}{
 	"web_search": {},
 }
 
-// openRouterPricingConditionalFields change when a price applies. Dropping
-// these conditions and keeping their prices would turn a time-based schedule
-// into a token-only tier, so the affected override is skipped as a whole.
+// openRouterPricingConditionalFields 会改变价格的适用条件。若丢弃
+// 这些条件却保留其价格，会把基于时间的计划变成仅按 token 的阶梯，
+// 因此受影响的覆盖项会被整体跳过。
 var openRouterPricingConditionalFields = map[string]struct{}{
 	"utc_days":  {},
 	"utc_end":   {},
@@ -50,15 +50,18 @@ var (
 	ErrOfficialPricingCacheWriteFailed = errors.New("official pricing cache write failed")
 )
 
-type openRouterPricingProvider interface {
+// OpenRouterPricingProvider 拉取 OpenRouter 模型目录原始 JSON。
+type OpenRouterPricingProvider interface {
 	FetchModels(ctx context.Context) ([]byte, error)
 }
 
 // OfficialPricingService 编排 OpenRouter 官方定价读取、持久缓存和降级策略。
 type OfficialPricingService struct {
-	provider openRouterPricingProvider
+	provider OpenRouterPricingProvider
 	cache    repository.OpenRouterPricingCacheRepository
-	mu       sync.Mutex
+	// builtin 为随版本发布的内置快照，持久缓存缺失、损坏或更旧时作为种子，远端不可达时兜底。
+	builtin *openRouterPricingCacheFile
+	mu      sync.Mutex
 }
 
 // OfficialPricingItem 表示第三方官方模型定价项。
@@ -98,7 +101,9 @@ type OfficialPricingResult struct {
 	FetchedAt time.Time
 	Cached    bool
 	Stale     bool
-	Items     []OfficialPricingItem
+	// Origin 为 remote 或 builtin；builtin 表示数据来自内置快照，价格可能落后于官方。
+	Origin string
+	Items  []OfficialPricingItem
 }
 
 type openRouterModelsResponse struct {
@@ -141,9 +146,11 @@ type openRouterPricingOverride struct {
 }
 
 type openRouterPricingCacheFile struct {
-	Version   int                          `json:"version,omitempty"`
-	FetchedAt time.Time                    `json:"fetchedAt"`
-	Items     []openRouterPricingCacheItem `json:"items"`
+	Version   int       `json:"version,omitempty"`
+	FetchedAt time.Time `json:"fetchedAt"`
+	// Origin 为 remote（远端同步）或 builtin（随版本发布的内置快照）；旧缓存缺省视为 remote。
+	Origin string                       `json:"origin,omitempty"`
+	Items  []openRouterPricingCacheItem `json:"items"`
 }
 
 type openRouterPricingCacheItem struct {
@@ -233,8 +240,7 @@ func (p *openRouterModelPricing) UnmarshalJSON(data []byte) error {
 	}
 	sort.Slice(thresholds, func(i, j int) bool { return thresholds[i] < thresholds[j] })
 	effective := make([]openRouterPricingOverride, 0, len(thresholds))
-	// Evaluate every interval from base prices. Matching entries overwrite
-	// individual keys in source order, including entries sharing a threshold.
+	// 每个区间都从基础价格重新计算；匹配项按来源顺序逐键覆盖，共享同一阈值的条目也按此处理。
 	for _, threshold := range thresholds {
 		tier := base
 		tier.MinPromptTokens = threshold
@@ -301,15 +307,12 @@ func parseOpenRouterPricingOverride(raw json.RawMessage, index int) (openRouterP
 				continue
 			}
 			if _, conditional := openRouterPricingConditionalFields[key]; conditional {
-				// A known schedule cannot be represented by the token-only
-				// tier shape. Retain the base model price, but skip this
-				// conditional override rather than applying it unconditionally.
+				// 已知的条件计价方案无法用仅按 token 的阶梯结构表示：
+				// 保留基础模型价格，跳过此条件覆盖项，而不是无条件地应用它。
 				usable = false
 			}
-			// A tier can still be represented when OpenRouter adds a provider
-			// dimension or another field that this billing form does not store.
-			// Record the field for the UI and omit only that field from the
-			// normalized override. The minimum token threshold remains usable.
+			// OpenRouter 增加提供方维度或本计费表单不存储的其他字段时，阶梯仍可表示：
+			// 记录该字段供 UI 展示，仅从规范化覆盖项中省略它，最小 token 阈值仍然可用。
 			unsupported = append(unsupported, path(key))
 		}
 	}
@@ -427,7 +430,7 @@ func openRouterCacheWritePriceBasis(modelID string) string {
 }
 
 // NewOfficialPricingService 创建依赖完整的官方定价应用服务。
-func NewOfficialPricingService(provider openRouterPricingProvider, cache repository.OpenRouterPricingCacheRepository) *OfficialPricingService {
+func NewOfficialPricingService(provider OpenRouterPricingProvider, cache repository.OpenRouterPricingCacheRepository) *OfficialPricingService {
 	return &OfficialPricingService{provider: provider, cache: cache}
 }
 
@@ -460,6 +463,7 @@ func (s *OfficialPricingService) GetOpenRouterOfficialPricing(ctx context.Contex
 	nextCache := openRouterPricingCacheFile{
 		Version:   openRouterPricingCacheVersion,
 		FetchedAt: time.Now().UTC(),
+		Origin:    OfficialPricingOriginRemote,
 		Items:     officialPricingCacheItems(items),
 	}
 	data, err := json.MarshalIndent(nextCache, "", "  ")
@@ -471,23 +475,41 @@ func (s *OfficialPricingService) GetOpenRouterOfficialPricing(ctx context.Contex
 	}
 	return OfficialPricingResult{
 		FetchedAt: nextCache.FetchedAt,
+		Origin:    OfficialPricingOriginRemote,
 		Items:     append([]OfficialPricingItem(nil), items...),
 	}, nil
 }
 
+// loadOpenRouterPricingCache 读取持久缓存；缺失、损坏、格式过旧或比内置快照旧时改用内置快照，
+// 并把内置快照写入持久缓存作为种子（写入失败不影响本次读取）。
 func (s *OfficialPricingService) loadOpenRouterPricingCache(ctx context.Context) (openRouterPricingCacheFile, bool, error) {
 	data, found, err := s.cache.Load(ctx)
 	if err != nil {
 		return openRouterPricingCacheFile{}, false, err
 	}
-	if !found {
-		return openRouterPricingCacheFile{}, false, nil
+	cache, ok := openRouterPricingCacheFile{}, false
+	if found {
+		cache, ok = decodeOpenRouterPricingCacheFile(data)
 	}
+	if s.builtin != nil && (!ok || cache.Version < openRouterPricingCacheVersion || s.builtin.FetchedAt.After(cache.FetchedAt)) {
+		seed := *s.builtin
+		if encoded, encodeErr := json.MarshalIndent(seed, "", "  "); encodeErr == nil {
+			_ = s.cache.Store(ctx, encoded)
+		}
+		return seed, true, nil
+	}
+	return cache, ok, nil
+}
+
+func decodeOpenRouterPricingCacheFile(data []byte) (openRouterPricingCacheFile, bool) {
 	var cache openRouterPricingCacheFile
 	if err := json.Unmarshal(data, &cache); err != nil || cache.FetchedAt.IsZero() || len(cache.Items) == 0 {
-		return openRouterPricingCacheFile{}, false, nil
+		return openRouterPricingCacheFile{}, false
 	}
-	return cache, true, nil
+	if strings.TrimSpace(cache.Origin) == "" {
+		cache.Origin = OfficialPricingOriginRemote
+	}
+	return cache, true
 }
 
 func officialPricingResultFromCache(cache openRouterPricingCacheFile, cached bool, stale bool) OfficialPricingResult {
@@ -498,9 +520,9 @@ func officialPricingResultFromCache(cache openRouterPricingCacheFile, cached boo
 		if legacyCache {
 			unsupportedFields = append(unsupportedFields, legacyOfficialPricingField)
 			item.Pricing.CacheWritePriceBasis = openRouterCacheWritePriceBasis(item.ID)
-			// v3/v4 rewrote Anthropic cache prices and lost source precision.
-			// Old materialized tiers also lost override precedence. Neither
-			// can be recovered reliably without a successful upstream refresh.
+			// v3/v4 重写了 Anthropic 缓存价格并丢失了来源精度。
+			// 旧的物化阶梯也丢失了覆盖优先级。两者
+			// 在没有成功的上游刷新时都无法可靠恢复。
 			if cache.Version >= 3 && isOpenRouterAnthropicModelID(item.ID) {
 				item.Pricing.InputCacheWrite = ""
 				unsupportedFields = append(unsupportedFields, "input_cache_write")
@@ -532,6 +554,7 @@ func officialPricingResultFromCache(cache openRouterPricingCacheFile, cached boo
 		FetchedAt: cache.FetchedAt,
 		Cached:    cached,
 		Stale:     stale,
+		Origin:    cache.Origin,
 		Items:     items,
 	}
 }

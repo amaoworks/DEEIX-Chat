@@ -12,13 +12,10 @@ import (
 
 	appaudit "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/audit"
 	app "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/internalmessaging"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
 	"github.com/gin-gonic/gin"
 )
-
-var errUnavailable = apperr.New("internal_messaging.unavailable", "internal messaging is unavailable")
 
 type auditWriter interface {
 	Write(context.Context, appaudit.WriteInput)

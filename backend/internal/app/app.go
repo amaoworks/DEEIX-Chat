@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -32,29 +36,32 @@ import (
 	appruntime "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/runtime"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/settings"
 	appskill "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/skill"
-	appsystemevent "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/systemevent"
 	appuicomponent "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/uicomponent"
 	appupload "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/upload"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/usersettings"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/cache"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/catalogdata"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	moderationclient "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/contentmoderation"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/embedding"
-	extractengines "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/extract/engines"
-	extractprobe "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/extract/probe"
+	extractionengines "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/extraction/engines"
+	extractionprobe "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/extraction/probe"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/geoip"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/identityprovider"
 	vocechat "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/integration/vocechat"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/mcp"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/mediaartifact"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/modelcatalog/modelsdev"
 	openrouterpricing "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/modelpricing/openrouter"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstorage"
 	platformlogger "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/observability/logger"
 	platformtracing "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/observability/tracing"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/openwebui"
 	epaypayment "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/payment/epay"
 	stripepayment "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/payment/stripe"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence"
 	filecache "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/filecache"
 	announcementrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/announcement"
 	auditrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/audit"
@@ -70,11 +77,11 @@ import (
 	promptpresetrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/promptpreset"
 	settingsrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/settings"
 	skillrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/skill"
-	systemeventrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/systemevent"
 	uicomponentrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/uicomponent"
 	userrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/user"
 	usersettingsrepo "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/persistence/postgres/usersettings"
 	platformruntime "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/runtime"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/lifecycle"
 	platformhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http"
 	adminhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/admin"
@@ -95,7 +102,6 @@ import (
 	userhttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/user"
 	usersettingshttp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/usersettings"
 	"github.com/gin-gonic/gin"
-	"github.com/go-redis/redis/v8"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -106,7 +112,7 @@ type App struct {
 	engine                 *gin.Engine
 	logger                 *zap.Logger
 	db                     *gorm.DB
-	redis                  *redis.Client
+	cache                  cache.Backend
 	geoResolver            *geoip.Client
 	identityProviderClient *identityprovider.Client
 	llmClient              *llm.Client
@@ -115,10 +121,16 @@ type App struct {
 	mediaArtifactClient    *mediaartifact.Client
 	moderationClient       *moderationclient.Client
 	conversationService    *conversation.Service
+	contentModeration      *appcontentmoderation.Service
+	authService            *auth.Service
+	runtimeCfg             *config.Runtime
 	tracingShutdown        platformtracing.ShutdownFunc
 	backgroundCancel       context.CancelFunc
 	// shutdown 是进程关停排空信号：翻转就绪探针并断开订阅型长连接。
 	shutdown *lifecycle.Shutdown
+	// stopCh 由 RequestShutdown 关闭，与 SIGTERM 等价。
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 type subscriptionGroupAdapter struct {
@@ -154,9 +166,25 @@ func (o avatarContentOpener) OpenAvatarFileContent(ctx context.Context, userID u
 	}, nil
 }
 
-// NewApp 创建应用。
+// Options 控制应用的运行形态。零值等价于普通服务器部署。
+type Options struct {
+	// LocalDataDir 非空时以本地 sidecar 模式运行，所有数据落在该目录（见 config.ApplyLocalMode）。
+	LocalDataDir string
+}
+
+// NewApp 创建普通服务器部署形态的应用。
 func NewApp() (*App, error) {
+	return NewAppWithOptions(Options{})
+}
+
+// NewAppWithOptions 按 Options 创建应用。
+func NewAppWithOptions(opts Options) (*App, error) {
 	cfg := config.Load()
+	if opts.LocalDataDir != "" {
+		if err := cfg.ApplyLocalMode(opts.LocalDataDir); err != nil {
+			return nil, err
+		}
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -171,7 +199,9 @@ func NewApp() (*App, error) {
 		Protocol:     cfg.OTelExporterOTLPProtocol,
 		SamplingRate: cfg.OTelSamplingRate,
 	})
-	if err != nil {
+	// 不含 OTLP exporter 的构建（桌面端 sidecar）只关闭链路追踪，不因环境里残留的 OTEL_* 变量而无法启动。
+	tracingUnavailable := errors.Is(err, platformtracing.ErrExporterUnavailable)
+	if err != nil && !tracingUnavailable {
 		return nil, fmt.Errorf("init tracing: %w", err)
 	}
 	keepTracing := false
@@ -184,17 +214,25 @@ func NewApp() (*App, error) {
 		_ = tracingShutdown(shutdownCtx)
 	}()
 
-	log, err := platformlogger.New(cfg.Env)
+	// 本地模式下 stdout 是与父进程的握手通道，日志改走 stderr。
+	newLogger := platformlogger.New
+	if cfg.LocalMode {
+		newLogger = platformlogger.NewStderr
+	}
+	log, err := newLogger(cfg.Env)
+	if err != nil {
+		return nil, err
+	}
+	if tracingUnavailable {
+		log.Warn("tracing is configured but this build has no OTLP exporter; tracing is disabled")
+	}
+
+	db, err := persistence.Open(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	db, err := openDatabase(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	redisClient, memoryCache, err := openCache(cfg)
+	cacheBackend, err := cache.Open(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -203,16 +241,15 @@ func NewApp() (*App, error) {
 	auditService := audit.NewService(auditRepo, log)
 	logCleanupRepo := logcleanuprepo.NewRepo(db)
 	logCleanupService := applogcleanup.NewService(logCleanupRepo, auditService)
-	systemEventRepo := systemeventrepo.NewRepo(db)
-	systemEventService := appsystemevent.NewService(systemEventRepo)
 
 	// 初始化 settings 模块：种子数据 + 动态配置覆盖
 	settingsRepo := settingsrepo.NewRepo(db)
 	settingsService := settings.NewService(settingsRepo, cfg.DataEncryptionKey)
 	settingsService.SetAuditWriter(auditService)
-	runtimeService := appruntime.NewService(runtimeCfg, extractprobe.Prober{})
+	settingsService.SetRuntime(runtimeCfg)
+	runtimeService := appruntime.NewService(runtimeCfg, extractionprobe.Prober{})
 	runtimeService.SetDockerRunner(platformruntime.NewDockerRunner())
-	settingsCache := buildSettingsCache(cfg, redisClient, memoryCache)
+	settingsCache := cacheBackend.Settings()
 	runtimeSettings := settings.NewRuntimeSettings(settingsRepo, settingsCache, cfg.DataEncryptionKey)
 	settingsHandler := settingshttp.NewHandler(settingsService, runtimeSettings, runtimeService, runtimeCfg)
 	settingsModule := settingshttp.NewModule(settingsHandler)
@@ -263,38 +300,41 @@ func NewApp() (*App, error) {
 		openrouterpricing.New(cfg.StrictOutboundPolicy()),
 		filecache.NewOpenRouterPricingCache(runtimeCfg.Snapshot().StorageRootDir),
 	)
+	if err := officialPricingService.SetBuiltinSnapshot(catalogdata.OpenRouterPricing()); err != nil {
+		log.Warn("builtin openrouter pricing snapshot is invalid", zap.Error(err))
+	}
 	paymentCheckoutService := billing.NewPaymentCheckoutService(stripepayment.New(cfg.StrictOutboundPolicy()), epaypayment.New())
 	billingHandler := billinghttp.NewHandler(billingService, settingsService, runtimeCfg, officialPricingService, paymentCheckoutService, log)
 	billingModule := billinghttp.NewModule(billingHandler)
 	// 对象存储工厂由组合根显式注入，避免服务实例依赖进程级可变状态。
-	objectStoreProvider := appstorage.NewRuntimeProvider(runtimeCfg, objectstore.New)
+	objectStoreProvider := appstorage.NewRuntimeProvider(runtimeCfg, objectstorage.New)
 	// 抽取引擎工厂由组合根显式注入；具体客户端构造为 nil 时必须返回 nil 接口，避免 typed-nil 绕过判空。
 	extractionFactories := extraction.EngineFactories{
 		NewTika: func(cfg config.Config) extraction.DocumentExtractor {
-			if client := extractengines.NewTika(cfg); client != nil {
+			if client := extractionengines.NewTika(cfg); client != nil {
 				return client
 			}
 			return nil
 		},
 		NewDocling: func(cfg config.Config) extraction.DocumentExtractor {
-			if client := extractengines.NewDocling(cfg); client != nil {
+			if client := extractionengines.NewDocling(cfg); client != nil {
 				return client
 			}
 			return nil
 		},
 		NewMinerU: func(cfg config.Config) extraction.DocumentExtractor {
-			if client := extractengines.NewMinerU(cfg); client != nil {
+			if client := extractionengines.NewMinerU(cfg); client != nil {
 				return client
 			}
 			return nil
 		},
 		NewOCR: func(provider string, cfg config.Config) extraction.OCRExtractor {
-			if client := extractengines.NewOCR(provider, cfg); client != nil {
+			if client := extractionengines.NewOCR(provider, cfg); client != nil {
 				return client
 			}
 			return nil
 		},
-		Builtin: extractengines.Builtin{},
+		Builtin: extractionengines.Builtin{},
 	}
 	geoResolver := geoip.New(runtimeCfg.Snapshot())
 	// GeoIP 关闭时 geoip.New 返回 nil 指针，必须转成 nil 接口再注入，避免 typed-nil 绕过判空。
@@ -310,13 +350,18 @@ func NewApp() (*App, error) {
 		identityProviderClient,
 	)
 	authService.SetLogger(log)
-	authService.SetProviderAuthBridge(buildProviderAuthBridge(cfg, redisClient, memoryCache))
+	authService.SetProviderAuthBridge(cacheBackend.ProviderAuthBridge())
 	authService.SetObjectStoreProvider(objectStoreProvider)
 	authService.SetAuditWriter(auditService)
 	settingsService.SetAuthSafetyService(authService)
 	authService.SetSubscriptionResolver(billingService)
-	bootstrapSuperAdmin, err := authService.EnsureBootstrapSuperAdmin(context.Background())
-	if err != nil {
+	var bootstrapSuperAdmin *auth.BootstrapSuperAdmin
+	if cfg.LocalMode {
+		// 本地模式：唯一用户无密码、无初始化引导，通过启动握手拿到的一次性授权凭证登录。
+		if _, err = authService.EnsureLocalOwner(context.Background()); err != nil {
+			return nil, err
+		}
+	} else if bootstrapSuperAdmin, err = authService.EnsureBootstrapSuperAdmin(context.Background()); err != nil {
 		return nil, err
 	}
 	authHandler := authhttp.NewHandler(authService)
@@ -327,7 +372,7 @@ func NewApp() (*App, error) {
 	memoryHandler := memoryhttp.NewHandler(memoryService)
 	memoryModule := memoryhttp.NewModule(memoryHandler)
 	channelRepo := channelrepo.NewRepo(db)
-	channelCache := buildChannelCache(cfg, redisClient, memoryCache)
+	channelCache := cacheBackend.Channel()
 	trustedOutboundPolicy := cfg.TrustedOutboundPolicy()
 	strictOutboundPolicy := cfg.StrictOutboundPolicy()
 	llmClient := llm.NewClient(trustedOutboundPolicy)
@@ -340,6 +385,15 @@ func NewApp() (*App, error) {
 	channelService.SetBillingModelPricingFilter(billingService)
 	channelService.SetPermissionGroupRepo(channelRepo)
 	channelService.SetSubscriptionGroupResolver(&subscriptionGroupAdapter{billing: billingService})
+	builtinModelCatalog, builtinModelCatalogErr := modelsdev.BuiltinSnapshot()
+	if builtinModelCatalogErr != nil {
+		log.Warn("builtin models.dev model catalog is invalid", zap.Error(builtinModelCatalogErr))
+	}
+	channelService.SetModelCatalogSources(
+		modelsdev.New(cfg.StrictOutboundPolicy()),
+		filecache.NewModelCatalogCache(runtimeCfg.Snapshot().StorageRootDir),
+		&builtinModelCatalog,
+	)
 	billingService.SetGroupRateMultiplierResolver(channelRepo)
 	billingService.SetPermissionGroupLookup(channelRepo)
 	billingService.SetModelPricingInvalidator(channelService.InvalidateModelCatalog)
@@ -351,7 +405,7 @@ func NewApp() (*App, error) {
 	channelModule := channelhttp.NewModule(channelHandler)
 	conversationRepo := conversationrepo.NewRepo(db)
 	settingsService.SetVectorStoreAvailabilityService(conversationRepo)
-	conversationCache := buildConversationCache(cfg, redisClient, memoryCache)
+	conversationCache := cacheBackend.Conversation()
 	mcpRepo := mcprepo.NewRepo(db)
 	embedClient := embedding.New(trustedOutboundPolicy)
 	compactService := compact.NewServiceWithRuntime(runtimeCfg, conversationRepo, log)
@@ -419,13 +473,11 @@ func NewApp() (*App, error) {
 	userHandler := userhttp.NewHandler(userService)
 	userModule := userhttp.NewModule(userHandler)
 	mcpService := appmcp.NewServiceWithRuntime(runtimeCfg, mcpRepo, mcpClient)
-	mcpService.SetSystemEventWriter(systemEventService)
 	mcpService.SetBillingModeProvider(billingService)
 	mcpHandler := mcphttp.NewHandler(mcpService)
 	mcpModule := mcphttp.NewModule(mcpHandler)
 	adminService := admin.NewService(userService, auditService)
 	adminService.SetAuthSecurityService(authService)
-	adminService.SetSystemEventService(systemEventService)
 	adminService.SetUsageLogService(billingService)
 	adminService.SetUsageStatisticsService(billingService)
 	adminService.SetOrderLogService(billingService)
@@ -477,8 +529,8 @@ func NewApp() (*App, error) {
 	knowledgeBaseHandler := knowledgebasehttp.NewHandler(knowledgeBaseService, runtimeCfg)
 	knowledgeBaseModule := knowledgebasehttp.NewModule(knowledgeBaseHandler)
 
-	hc := newHealthChecker(db, cfg.CacheDriver, redisClient)
-	rateLimiter := buildRateLimiter(cfg, redisClient, memoryCache)
+	hc := newHealthChecker(db, cacheBackend)
+	rateLimiter := cacheBackend.RateLimiter()
 	engine, err := platformhttp.NewEngine(runtimeCfg, log, platformhttp.Modules{
 		Auth:              authModule,
 		AuthService:       authService,
@@ -521,14 +573,16 @@ func NewApp() (*App, error) {
 	conversationService.StartBackgroundWorkers(backgroundCtx)
 	contentModerationService.StartBackgroundWorkers(backgroundCtx)
 	channelService.StartModelIconAssetCleanup(backgroundCtx)
+	channelService.LoadModelCatalog(backgroundCtx)
 	internalMessagingService.StartBackgroundWorkers(backgroundCtx)
 
 	app := &App{
+		stopCh:                 make(chan struct{}),
 		cfg:                    runtimeCfg.Snapshot(),
 		engine:                 engine,
 		logger:                 log,
 		db:                     db,
-		redis:                  redisClient,
+		cache:                  cacheBackend,
 		geoResolver:            geoResolver,
 		identityProviderClient: identityProviderClient,
 		llmClient:              llmClient,
@@ -537,6 +591,9 @@ func NewApp() (*App, error) {
 		mediaArtifactClient:    mediaArtifactClient,
 		moderationClient:       moderationClient,
 		conversationService:    conversationService,
+		contentModeration:      contentModerationService,
+		authService:            authService,
+		runtimeCfg:             runtimeCfg,
 		tracingShutdown:        tracingShutdown,
 		backgroundCancel:       backgroundCancel,
 		shutdown:               shutdownSignal,
@@ -545,11 +602,53 @@ func NewApp() (*App, error) {
 	return app, nil
 }
 
-// Run 启动 HTTP 服务并支持优雅停机。
+// IssueLocalGrant 为本地模式生成一次性登录授权凭证；非本地模式返回错误。
+func (a *App) IssueLocalGrant() (string, error) {
+	if !a.cfg.LocalMode {
+		return "", errors.New("local grant is only available in local mode")
+	}
+	return a.authService.IssueLocalGrant()
+}
+
+// Listen 绑定监听地址并返回实际地址。本地模式绑定 127.0.0.1:0，端口由系统分配；
+// 调用方在 Serve 之前即可据此完成与父进程的握手。
+func (a *App) Listen() (net.Listener, error) {
+	addr := strings.TrimSpace(a.cfg.HTTPListenAddr)
+	if addr == "" {
+		addr = fmt.Sprintf(":%s", a.cfg.HTTPPort)
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if a.cfg.LocalMode {
+		origin := "http://" + listener.Addr().String()
+		a.cfg.SetLocalOrigin(origin)
+		snapshot := a.runtimeCfg.Snapshot()
+		snapshot.SetLocalOrigin(origin)
+		a.runtimeCfg.Store(snapshot)
+	}
+	return listener, nil
+}
+
+// Run 监听并服务，直到收到终止信号。
 func (a *App) Run() error {
-	addr := fmt.Sprintf(":%s", a.cfg.HTTPPort)
+	listener, err := a.Listen()
+	if err != nil {
+		return err
+	}
+	return a.Serve(listener)
+}
+
+// RequestShutdown 触发与 SIGTERM 相同的优雅排空流程，可安全重复调用；
+// 本地模式下桌面壳退出时使用。
+func (a *App) RequestShutdown() {
+	a.stopOnce.Do(func() { close(a.stopCh) })
+}
+
+// Serve 在已绑定的监听器上服务，直到收到终止信号；随后分阶段排空。
+func (a *App) Serve(listener net.Listener) error {
 	srv := &http.Server{
-		Addr:              addr,
 		Handler:           a.engine,
 		ReadHeaderTimeout: httpTimeoutSeconds(a.cfg.HTTPReadHeaderTimeoutSeconds, 10),
 		ReadTimeout:       httpTimeoutSeconds(a.cfg.HTTPReadTimeoutSeconds, 120),
@@ -559,8 +658,8 @@ func (a *App) Run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		a.logger.Info("server_starting", zap.String("port", a.cfg.HTTPPort))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		a.logger.Info("server_starting", zap.String("addr", listener.Addr().String()))
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 		close(errCh)
@@ -574,6 +673,8 @@ func (a *App) Run() error {
 		return err
 	case sig := <-quit:
 		a.logger.Info("server_shutting_down", zap.String("signal", sig.String()))
+	case <-a.stopCh:
+		a.logger.Info("server_shutting_down", zap.String("signal", "parent_exit"))
 	}
 
 	// 阶段一：进入排空。就绪探针翻转为 503 引导负载均衡摘流，
@@ -623,11 +724,20 @@ func (a *App) Close() {
 	if a.backgroundCancel != nil {
 		a.backgroundCancel()
 	}
+	// Workers 必须在其依赖（cache、database）关闭前排空。
+	if a.contentModeration != nil {
+		a.contentModeration.Stop()
+	}
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := background.Wait(drainCtx); err != nil {
+		a.logger.Warn("background_tasks_drain_timeout", zap.Error(err))
+	}
+	cancelDrain()
 	if a.conversationService != nil {
 		a.conversationService.Close()
 	}
-	if a.redis != nil {
-		_ = a.redis.Close()
+	if a.cache != nil {
+		_ = a.cache.Close()
 	}
 	if a.geoResolver != nil {
 		a.geoResolver.Close()

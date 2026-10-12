@@ -36,7 +36,7 @@ type persistMessageGenerationInput struct {
 	PersistedToolCallKeys     map[string]struct{}
 	Route                     *channel.ResolvedRoute
 	ReuseUserMessage          bool
-	// SkipEmbed defers message embedding until the moderation barrier passes.
+	// SkipEmbed 将消息向量化推迟到审核屏障通过之后。
 	SkipEmbed bool
 }
 
@@ -141,6 +141,7 @@ func (s *Service) persistSuccessfulMessageGeneration(ctx context.Context, input 
 			ReasoningTokens:  input.ReasoningTokens,
 			LatencyMS:        input.AssistantLatency,
 			Status:           "success",
+			ReasoningEffort:  input.AssistantMessage.ReasoningEffort,
 		},
 	); err != nil {
 		return err
@@ -232,6 +233,7 @@ func (s *Service) persistAssistantImagePayloadIfPresent(ctx context.Context, inp
 				ReasoningTokens:  input.ReasoningTokens,
 				LatencyMS:        input.AssistantLatency,
 				Status:           "success",
+				ReasoningEffort:  input.AssistantMessage.ReasoningEffort,
 			},
 			normalized.AttachmentRows,
 		); err != nil {
@@ -256,6 +258,7 @@ func (s *Service) persistAssistantImagePayloadIfPresent(ctx context.Context, inp
 				ReasoningTokens:  input.ReasoningTokens,
 				LatencyMS:        input.AssistantLatency,
 				Status:           "success",
+				ReasoningEffort:  input.AssistantMessage.ReasoningEffort,
 			},
 			normalized.AttachmentRows,
 		); err != nil {
@@ -321,8 +324,8 @@ func (s *Service) finishSuccessfulMessageGeneration(ctx context.Context, input p
 
 // persistInterruptedMessageGeneration 在模型调用已经产生可见内容或工具轨迹后失败时，保留本轮 assistant 消息。
 // 显式取消由取消流程单独处理，避免把用户主动停止误标为异常中断。
-// Partial outputs from cancel/interrupt/upstream errors remain subject to the
-// moderation barrier after persistence.
+// 取消/中断/上游错误产生的部分输出在持久化后
+// 仍受审核屏障约束。
 func (s *Service) persistInterruptedMessageGeneration(ctx context.Context, input persistInterruptedMessageGenerationInput) *SendMessageResult {
 	if !shouldPersistInterruptedMessageGeneration(input) {
 		return nil
@@ -373,6 +376,7 @@ func (s *Service) persistInterruptedMessageGeneration(ctx context.Context, input
 			CacheWriteTokens: interruptedCompletionCacheWriteTokens(input, metrics),
 			ReasoningTokens:  metrics.ReasoningTokens,
 			LatencyMS:        metrics.LatencyMS,
+			ReasoningEffort:  input.AssistantMessage.ReasoningEffort,
 			Status:           retainedGenerationStatus(input.Error),
 			ErrorCode:        metrics.ErrorCode,
 			ErrorMessage:     metrics.ErrorMessage,

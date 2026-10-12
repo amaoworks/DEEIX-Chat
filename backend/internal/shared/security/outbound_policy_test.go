@@ -40,8 +40,8 @@ func TestOutboundHTTPCallSitesAreExplicit(t *testing.T) {
 			reason: "direct HTTP clients must be reviewed for external-vs-internal trust boundaries",
 			files: allowFiles(
 				"internal/infra/embedding/client.go",
-				"internal/infra/extract/ocr/client.go",
-				"internal/infra/extract/mineru/client.go",
+				"internal/infra/extraction/ocr/client.go",
+				"internal/infra/extraction/mineru/client.go",
 				"internal/infra/geoip/client.go",
 				// VoceChat is an administrator-configured, Docker-private service.
 				// It must not use the public egress policy intended for user-configured upstreams.
@@ -56,10 +56,10 @@ func TestOutboundHTTPCallSitesAreExplicit(t *testing.T) {
 		"platformtracing.NewHTTPClient(": {
 			reason: "raw tracing HTTP clients are reserved for trusted internal services or fixed endpoints",
 			files: allowFiles(
-				"internal/infra/extract/docling/client.go",
-				"internal/infra/extract/mineru/client.go",
-				"internal/infra/extract/ocr/client.go",
-				"internal/infra/extract/tika/client.go",
+				"internal/infra/extraction/docling/client.go",
+				"internal/infra/extraction/mineru/client.go",
+				"internal/infra/extraction/ocr/client.go",
+				"internal/infra/extraction/tika/client.go",
 				"internal/infra/geoip/mmdb.go",
 			),
 		},

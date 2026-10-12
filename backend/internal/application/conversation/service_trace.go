@@ -229,10 +229,6 @@ func (r *messageTraceRecorder) enabled() bool {
 	return r != nil && r.cfg.ProcessTraceEnabled && r.assistant != nil
 }
 
-func (r *messageTraceRecorder) visible() bool {
-	return r.enabled() && r.cfg.ProcessTraceVisibleToUser
-}
-
 // completeForBackgroundContinuation 同步落盘当前 trace 后切换到后台上下文。
 // 进程 trace 在存在后台压缩阶段时保持 streaming，工具与模型思考仍正常收尾；
 // 这样响应消息能明确展示“压缩排队中”，后台完成或失败后再原位更新该阶段。
@@ -303,6 +299,34 @@ func (r *messageTraceRecorder) setCompactionProcessStage(summary string, markdow
 	r.emitProcessUpdate()
 }
 
+// replaceProcessSection 用新的段落替换之前记录的同一处理阶段：替换 markdown 段落与文件分组，
+// 按阶段类型覆盖状态。用于路由故障转移后，让文件上下文展示与实际发出请求的路由一致。
+func (r *messageTraceRecorder) replaceProcessSection(previousSummary string, previousMarkdown string, summary string, markdown string, payload *tracePayload) {
+	if !r.enabled() || r.process == nil {
+		return
+	}
+	draft := r.process
+	previous, next := strings.TrimSpace(previousMarkdown), strings.TrimSpace(markdown)
+	if previous != "" && next != "" {
+		draft.contentMarkdown = strings.Replace(draft.contentMarkdown, previous, next, 1)
+	}
+	// 后续阶段可能已改写标题；只有标题仍是本阶段写入的那句时才同步更新。
+	if strings.TrimSpace(draft.summary) == strings.TrimSpace(previousSummary) && strings.TrimSpace(summary) != "" {
+		draft.summary = strings.TrimSpace(summary)
+	}
+	if stage := firstTraceStage(payload); stage != nil {
+		upsertProcessTraceStagePayload(draft.payload, stage)
+	}
+	if payload != nil {
+		metadata := payload.clone()
+		metadata.TraceStage = nil
+		metadata.Stages = nil
+		mergeTracePayload(draft.payload, metadata)
+	}
+	r.persistDraft(draft, false)
+	r.emitProcessUpdate()
+}
+
 func (r *messageTraceRecorder) removeProcessStage(kind string) {
 	if !r.enabled() || r.process == nil {
 		return
@@ -332,9 +356,6 @@ func (r *messageTraceRecorder) ensureDraft(traceType string) *messageTraceDraft 
 		}
 		return r.process
 	case messageTraceTypeUpstreamThink:
-		if !r.cfg.ProcessTraceStoreUpstreamThink {
-			return nil
-		}
 		if r.upstreamThink == nil || r.upstreamThink.status == messageTraceStatusCompleted || r.upstreamThink.status == messageTraceStatusError {
 			r.upstreamThink = r.newTraceDraft(traceType, "think", "模型思考", 3, messageTraceStageThink, r.nextTraceRoundID(), "")
 		}
@@ -625,10 +646,10 @@ func (r *messageTraceRecorder) syncStructuredThink(content string, summary strin
 	r.updateStructuredThinkDraft(draft, content, summary, payload)
 }
 
-// reconcileStructuredThink applies the final upstream snapshot to the reasoning
-// event already emitted for the same item. A completed stream event is still the
-// canonical event for that item; final response reconciliation must not create a
-// second round merely because the live event has already completed.
+// reconcileStructuredThink 将最终上游快照应用到同一条目
+// 已发出的推理事件上。已完成的流事件仍是该条目的
+// 权威事件；最终响应对账不得仅因实时事件
+// 已完成就创建第二轮。
 func (r *messageTraceRecorder) reconcileStructuredThink(content string, summary string, payload *tracePayload) {
 	if !r.enabled() || (content == "" && summary == "") {
 		return
@@ -823,7 +844,7 @@ func (r *messageTraceRecorder) failWithContext(ctx context.Context, err error) {
 }
 
 func (r *messageTraceRecorder) attachToMessage(message *model.Message) {
-	if message == nil || !r.visible() {
+	if message == nil || !r.enabled() {
 		return
 	}
 	message.ProcessTrace = r.snapshot()
@@ -837,7 +858,7 @@ func (r *messageTraceRecorder) upstreamThinkContent() string {
 }
 
 func (r *messageTraceRecorder) snapshot() *model.MessageProcessTrace {
-	if !r.visible() {
+	if !r.enabled() {
 		return nil
 	}
 	process := traceDraftToBlock(r.process)
@@ -861,9 +882,9 @@ func (r *messageTraceRecorder) persistDraft(draft *messageTraceDraft, force bool
 	r.persistDraftCtx(r.ctx, draft, force)
 }
 
-// enqueueDraftPersistence serializes terminal trace writes in event order. The
-// JSON payload is materialized before the goroutine starts so later live-event
-// reconciliation cannot mutate data being persisted in the background.
+// enqueueDraftPersistence 按事件顺序串行化终态 trace 写入。
+// JSON 载荷在 goroutine 启动前物化，使后续的实时事件
+// 对账无法修改正在后台持久化的数据。
 func (r *messageTraceRecorder) enqueueDraftPersistence(draft *messageTraceDraft, payloadJSON string) {
 	if !r.enabled() || r.ephemeral || draft == nil || r.service == nil || r.service.repo == nil {
 		return
@@ -921,8 +942,8 @@ func (r *messageTraceRecorder) waitForPendingPersistence(ctx context.Context) {
 	}
 }
 
-// persistDraftBackground uses a detached timeout because terminal trace
-// durability must not depend on the client request remaining connected.
+// persistDraftBackground 使用独立的超时，因为终态 trace 的
+// 持久性不能依赖客户端请求保持连接。
 func (r *messageTraceRecorder) persistDraftBackground(parent context.Context, draft *messageTraceDraft, payloadJSON string) {
 	ctx, cancel := background.WithTimeout(parent, 5*time.Second)
 	defer cancel()
@@ -1260,7 +1281,7 @@ func (r *messageTraceRecorder) liveSnapshot() *model.MessageProcessTrace {
 }
 
 func (r *messageTraceRecorder) emitProcessUpdate() {
-	if !r.visible() || r.process == nil {
+	if !r.enabled() || r.process == nil {
 		return
 	}
 	emitEvent(r.onEvent, "process_update", map[string]any{
@@ -1271,7 +1292,7 @@ func (r *messageTraceRecorder) emitProcessUpdate() {
 }
 
 func (r *messageTraceRecorder) emitToolUpdate() {
-	if !r.visible() || r.tools == nil {
+	if !r.enabled() || r.tools == nil {
 		return
 	}
 	emitEvent(r.onEvent, "process_update", map[string]any{
@@ -1283,7 +1304,7 @@ func (r *messageTraceRecorder) emitToolUpdate() {
 
 // emitUpstreamThinkUpdate 在思考轮次结束时推送结构快照，让客户端的事件列表立即拿到终态与结束时间。
 func (r *messageTraceRecorder) emitUpstreamThinkUpdate() {
-	if !r.visible() || r.upstreamThink == nil {
+	if !r.enabled() || r.upstreamThink == nil {
 		return
 	}
 	trace := r.liveSnapshot()
@@ -1298,7 +1319,7 @@ func (r *messageTraceRecorder) emitUpstreamThinkUpdate() {
 }
 
 func (r *messageTraceRecorder) emitUpstreamThinkDelta(update upstreamThinkLiveUpdate) {
-	if !r.visible() || r.upstreamThink == nil {
+	if !r.enabled() || r.upstreamThink == nil {
 		return
 	}
 	payload := map[string]any{
@@ -1534,6 +1555,8 @@ func cloneTraceFileGroups(groups *attachmentTraceFileGroups) *attachmentTraceFil
 	clone.Retrieval = append([]string(nil), groups.Retrieval...)
 	clone.FullContext = append([]string(nil), groups.FullContext...)
 	clone.Skipped = append([]string(nil), groups.Skipped...)
+	clone.Native = append([]string(nil), groups.Native...)
+	clone.Unsupported = append([]string(nil), groups.Unsupported...)
 	return &clone
 }
 
@@ -1547,6 +1570,8 @@ func cloneTraceFileRefGroups(groups *attachmentTraceRefGroups) *attachmentTraceR
 	clone.Retrieval = append([]attachmentTraceFileRef(nil), groups.Retrieval...)
 	clone.FullContext = append([]attachmentTraceFileRef(nil), groups.FullContext...)
 	clone.Skipped = append([]attachmentTraceFileRef(nil), groups.Skipped...)
+	clone.Native = append([]attachmentTraceFileRef(nil), groups.Native...)
+	clone.Unsupported = append([]attachmentTraceFileRef(nil), groups.Unsupported...)
 	return &clone
 }
 
@@ -1871,6 +1896,9 @@ type attachmentTraceFileGroups struct {
 	Retrieval    []string `json:"retrieval"`
 	FullContext  []string `json:"full_context"`
 	Skipped      []string `json:"skipped"`
+	// Native 为以原生文档内容块发送的文件；Unsupported 为当前模型不支持该类型输入、未提供的文件。
+	Native      []string `json:"native,omitempty"`
+	Unsupported []string `json:"unsupported,omitempty"`
 }
 
 type attachmentTraceRefGroups struct {
@@ -1879,6 +1907,8 @@ type attachmentTraceRefGroups struct {
 	Retrieval    []attachmentTraceFileRef `json:"retrieval"`
 	FullContext  []attachmentTraceFileRef `json:"full_context"`
 	Skipped      []attachmentTraceFileRef `json:"skipped"`
+	Native       []attachmentTraceFileRef `json:"native,omitempty"`
+	Unsupported  []attachmentTraceFileRef `json:"unsupported,omitempty"`
 }
 
 type attachmentTracePayload struct {
@@ -1918,6 +1948,12 @@ func buildAttachmentProcessTrace(
 			continue
 		}
 		switch item.ContextMode {
+		case fileContextModeNativeDocument:
+			payload.FileGroups.Native = append(payload.FileGroups.Native, name)
+			payload.FileGroupRefs.Native = append(payload.FileGroupRefs.Native, ref)
+		case fileContextModeUnsupported:
+			payload.FileGroups.Unsupported = append(payload.FileGroups.Unsupported, name)
+			payload.FileGroupRefs.Unsupported = append(payload.FileGroupRefs.Unsupported, ref)
 		case fileContextModeRAG:
 			payload.FileGroups.Retrieval = append(payload.FileGroups.Retrieval, name)
 			payload.FileGroupRefs.Retrieval = append(payload.FileGroupRefs.Retrieval, ref)
@@ -1940,8 +1976,8 @@ func buildAttachmentProcessTrace(
 			payload.FileGroupRefs.FullContext = append(payload.FileGroupRefs.FullContext, ref)
 		}
 	}
-	includedCount := len(attachments) - len(payload.FileGroups.Skipped)
-	skippedCount := len(payload.FileGroups.Skipped)
+	skippedCount := len(payload.FileGroups.Skipped) + len(payload.FileGroups.Unsupported)
+	includedCount := len(attachments) - skippedCount
 	summary := formatAttachmentProcessCounts(includedCount, skippedCount, "已纳入")
 	detail := fmt.Sprintf("文件已就绪，%s。", formatAttachmentProcessCounts(includedCount, skippedCount, "纳入"))
 	return summary, formatTraceStep("文件上下文", detail), attachmentTracePayloadMap(payload)
@@ -1976,11 +2012,12 @@ func newAttachmentTraceFileRef(item AttachmentInput, fallbackName string) attach
 }
 
 func attachmentTracePayloadMap(payload attachmentTracePayload) *tracePayload {
-	includedCount := len(payload.FileRefs) - len(payload.FileGroupRefs.Skipped)
+	skippedCount := len(payload.FileGroupRefs.Skipped) + len(payload.FileGroupRefs.Unsupported)
+	includedCount := len(payload.FileRefs) - skippedCount
 	if includedCount < 0 {
 		includedCount = 0
 	}
-	stage := traceStage{Kind: processTraceKindFileContext, Status: processTraceStatusReady, IncludedCount: includedCount, SkippedCount: len(payload.FileGroupRefs.Skipped)}
+	stage := traceStage{Kind: processTraceKindFileContext, Status: processTraceStatusReady, IncludedCount: includedCount, SkippedCount: skippedCount}
 	return &tracePayload{
 		FileMode: payload.FileMode, FileNames: payload.FileNames, FileRefs: payload.FileRefs,
 		FileGroups: payload.FileGroups, FileGroupRefs: payload.FileGroupRefs,
@@ -2006,7 +2043,7 @@ func buildRAGProcessTrace(
 	}
 	citations := make([]traceCitation, 0, len(chunks))
 	for _, chunk := range chunks {
-		citations = append(citations, traceCitation{FileName: chunk.FileName, FileID: chunk.FileID, ChunkIndex: chunk.ChunkIndex, Score: chunk.Score, Preview: textutil.CompactSnippet(chunk.Content, 100)})
+		citations = append(citations, traceCitation{FileName: chunk.FileName, FileID: chunk.FileID, ChunkIndex: chunk.ChunkIndex, Score: chunk.Score, Preview: textutil.CompactSnippet(chunk.Content, 100), Modality: chunk.Modality})
 	}
 	detail := fmt.Sprintf("检索已完成，共检索 %d 个文件，命中 %d 个段落。", len(names), len(chunks))
 	stage := traceStage{Kind: processTraceKindRetrieval, Status: processTraceStatusCompleted, FileCount: len(names), ChunkCount: len(chunks)}

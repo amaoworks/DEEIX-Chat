@@ -19,7 +19,7 @@ import (
 	domainmcp "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/mcp"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/mcp"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstorage"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/llm"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/security"
@@ -81,12 +81,12 @@ func TestProcessImageAttachmentsRoutesOnlyTextToMainModelContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	store := objectstore.NewLocal(t.TempDir())
+	store := objectstorage.NewLocal(t.TempDir())
 	imageData := testPNG(t)
-	if _, err := store.Put(t.Context(), "images/current.png", bytes.NewReader(imageData), objectstore.PutOptions{ContentType: "image/png"}); err != nil {
+	if _, err := store.Put(t.Context(), "images/current.png", bytes.NewReader(imageData), objectstorage.PutOptions{ContentType: "image/png"}); err != nil {
 		t.Fatalf("put image: %v", err)
 	}
-	if _, err := store.Put(t.Context(), "images/second.png", bytes.NewReader(imageData), objectstore.PutOptions{ContentType: "image/png"}); err != nil {
+	if _, err := store.Put(t.Context(), "images/second.png", bytes.NewReader(imageData), objectstorage.PutOptions{ContentType: "image/png"}); err != nil {
 		t.Fatalf("put second image: %v", err)
 	}
 	service := &Service{
@@ -157,8 +157,17 @@ func TestProcessImageAttachmentsRoutesOnlyTextToMainModelContext(t *testing.T) {
 	messages := injectUserContext(t.Context(), []llm.Message{{Role: "user", Content: "图中有什么？"}}, userContextInput{
 		ImageAnalyses: result.Analyses,
 	}, config.Config{}, nil)
-	if len(messages) != 1 || len(messages[0].Parts) != 0 || !strings.Contains(messages[0].Content, "画面中有一辆红色汽车。") {
-		t.Fatalf("expected text-only analysis context, got %#v", messages)
+	if len(messages) != 1 || len(messages[0].Parts) != 2 {
+		t.Fatalf("expected question plus analysis context, got %#v", messages)
+	}
+	for _, part := range messages[0].Parts {
+		if part.Kind != llm.ContentPartText {
+			t.Fatalf("expected text-only analysis context, got %#v", messages)
+		}
+	}
+	if !messages[0].Parts[0].Dynamic || !strings.Contains(messages[0].Parts[0].Text, "画面中有一辆红色汽车。") ||
+		messages[0].Parts[1].Text != "图中有什么？" {
+		t.Fatalf("expected image analyses as dynamic context before the question, got %#v", messages)
 	}
 }
 
@@ -234,7 +243,7 @@ func TestBuildMessageRoutePromptSkipsRawImagesAfterProcessorRouting(t *testing.T
 			Content:     "描述图片",
 			Attachments: `[{"file_id":"image-1","kind":"image","mime_type":"image/png"}]`,
 		}},
-		StableAttachments: []AttachmentInput{{
+		ConversationFiles: []AttachmentInput{{
 			FileID: "image-1", Kind: "image", MimeType: "image/png", ContextMode: fileContextModeDirectImage,
 		}},
 		SkipImageAttachments: true,

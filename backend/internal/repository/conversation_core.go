@@ -31,6 +31,8 @@ type AssistantMessageCompletionUpdate struct {
 	ErrorCode        string
 	ErrorMessage     string
 	KnowledgeSources []domainconversation.MessageKnowledgeSource
+	// ReasoningEffort 为 nil 时保留原值，避免媒体等无推理能力的完成路径清空已记录的档位。
+	ReasoningEffort *string
 }
 
 // ForkConversationMessage 描述 fork 时待创建的消息及其源消息关系。
@@ -71,7 +73,7 @@ type ConversationListInput struct {
 	SearchQuery   string
 }
 
-// DeleteConversationProjectOptions controls which project-owned records are removed.
+// DeleteConversationProjectOptions 控制删除哪些项目所属的记录。
 type DeleteConversationProjectOptions struct {
 	DeleteConversations bool
 	DeleteFiles         bool
@@ -123,7 +125,7 @@ type MessageRepository interface {
 	GetMessageByPublicIDForUser(ctx context.Context, userID uint, publicID string) (*domainconversation.Message, error)
 	UpdateMessageUsage(ctx context.Context, messageID uint, usage MessageUsageUpdate) error
 	UpdateMessageState(ctx context.Context, messageID uint, status string, errorCode string, errorMessage string) error
-	UpdateAssistantMessageContent(ctx context.Context, userID uint, publicID string, content string, editedAt time.Time) (*domainconversation.Message, error)
+	UpdateMessageContent(ctx context.Context, userID uint, publicID string, content string, editedAt time.Time) (*domainconversation.Message, error)
 	CancelPendingGenerationMessagesByRunID(ctx context.Context, userID uint, runID string, errorCode string, errorMessage string) (bool, error)
 	InterruptPendingAssistantMessageByRunID(ctx context.Context, userID uint, runID string, errorCode string, errorMessage string) (bool, error)
 	UpdateAssistantMessageCompletion(ctx context.Context, messageID uint, update AssistantMessageCompletionUpdate) error

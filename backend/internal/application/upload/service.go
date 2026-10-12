@@ -21,7 +21,7 @@ import (
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/conv"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/pkg/filetype"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/objectstorage"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/pagination"
 	"github.com/google/uuid"
@@ -118,7 +118,7 @@ type ListFilesInput struct {
 }
 
 type saveUploadedFileInput struct {
-	Store          objectstore.Store
+	Store          objectstorage.Store
 	Reader         io.Reader
 	UserPublicID   string
 	FileID         string
@@ -156,7 +156,7 @@ func (s *Service) SetObjectStoreProvider(provider appstorage.Provider) {
 	}
 }
 
-func (s *Service) openObjectStore(ctx context.Context) (objectstore.Store, error) {
+func (s *Service) openObjectStore(ctx context.Context) (objectstorage.Store, error) {
 	if s == nil || s.storeProvider == nil {
 		return nil, appstorage.ErrProviderNotConfigured
 	}
@@ -313,7 +313,7 @@ func (s *Service) UploadFile(ctx context.Context, input UploadFileInput) (*Uploa
 		StoragePath:      relativePath,
 		Status:           "active",
 		ProcessingStatus: "uploaded",
-		ProcessingReady:  category == fileCategoryVideo || (category == fileCategoryImage && !cfg.ExtractImageOCREnabled),
+		ProcessingReady:  category == fileCategoryVideo || category == fileCategoryAudio || (category == fileCategoryImage && !cfg.ExtractImageOCREnabled),
 		ExtractStatus:    "none",
 		EmbedStatus:      "none",
 		ExtractorVersion: s.resolveExtractorVersion(),
@@ -405,7 +405,7 @@ func (s *Service) releaseUploadGate(key string, gate *uploadContentGate) {
 
 func (s *Service) tryReuseExistingFile(
 	ctx context.Context,
-	store objectstore.Store,
+	store objectstorage.Store,
 	userID uint,
 	shaValue string,
 	sizeBytes int64,
@@ -468,14 +468,14 @@ func (s *Service) tryReuseExistingFile(
 	}
 }
 
-func objectMatchesContent(ctx context.Context, store objectstore.Store, path string, expectedSHA256 string, expectedSize int64) (bool, error) {
+func objectMatchesContent(ctx context.Context, store objectstorage.Store, path string, expectedSHA256 string, expectedSize int64) (bool, error) {
 	normalizedPath := strings.TrimSpace(path)
 	if normalizedPath == "" {
 		return false, nil
 	}
 	reader, info, err := store.Open(ctx, normalizedPath)
 	if err != nil {
-		if errors.Is(err, objectstore.ErrNotFound) || errors.Is(err, objectstore.ErrInvalidKey) {
+		if errors.Is(err, objectstorage.ErrNotFound) || errors.Is(err, objectstorage.ErrInvalidKey) {
 			return false, nil
 		}
 		return false, err
@@ -626,7 +626,7 @@ func (s *Service) OpenFileContent(ctx context.Context, userID uint, fileID strin
 	}
 	reader, info, err := store.Open(ctx, item.StoragePath)
 	if err != nil {
-		if errors.Is(err, objectstore.ErrNotFound) {
+		if errors.Is(err, objectstorage.ErrNotFound) {
 			return nil, s.errFileNotFound()
 		}
 		return nil, err
@@ -664,6 +664,7 @@ func (s *Service) OpenFileContent(ctx context.Context, userID uint, fileID strin
 const (
 	fileCategoryImage        = "image"
 	fileCategoryVideo        = "video"
+	fileCategoryAudio        = "audio"
 	fileCategoryPDF          = "pdf"
 	fileCategoryWord         = "word"
 	fileCategoryPresentation = "presentation"
@@ -800,6 +801,24 @@ func normalizeDetectedMIME(detected string, fileName string) string {
 		return "video/mp4"
 	case "webm":
 		return "video/webm"
+	case "mov":
+		return "video/quicktime"
+	case "mpeg", "mpg":
+		return "video/mpeg"
+	case "mp3":
+		return "audio/mpeg"
+	case "wav":
+		return "audio/wav"
+	case "m4a":
+		return "audio/mp4"
+	case "aac":
+		return "audio/aac"
+	case "ogg", "oga":
+		return "audio/ogg"
+	case "flac":
+		return "audio/flac"
+	case "aif", "aiff":
+		return "audio/aiff"
 	}
 	if ext != "" && filetype.IsText("", "sample."+ext) {
 		return "text/plain"
@@ -868,6 +887,8 @@ func inferFileCategory(mimeType string, fileName string) string {
 		return fileCategoryImage
 	case strings.HasPrefix(mimeType, "video/"):
 		return fileCategoryVideo
+	case strings.HasPrefix(mimeType, "audio/"):
+		return fileCategoryAudio
 	case mimeType == "application/pdf" || ext == "pdf":
 		return fileCategoryPDF
 	case strings.Contains(mimeType, "wordprocessingml") || strings.Contains(mimeType, "msword") || ext == "docx" || ext == "doc":
@@ -904,7 +925,7 @@ func maxBytesForCategory(category string, cfg config.Config) int64 {
 	if category == fileCategoryImage {
 		return cfg.FileImageMaxBytes
 	}
-	if category == fileCategoryVideo {
+	if category == fileCategoryVideo || category == fileCategoryAudio {
 		return 0
 	}
 	return cfg.FileDocMaxBytes
@@ -959,7 +980,7 @@ func saveUploadedFile(ctx context.Context, input saveUploadedFileInput) (string,
 		return "", "", "", 0, err
 	}
 	defer tmpFile.Close() //nolint:errcheck
-	if _, err = input.Store.Put(ctx, relativePath, tmpFile, objectstore.PutOptions{
+	if _, err = input.Store.Put(ctx, relativePath, tmpFile, objectstorage.PutOptions{
 		SizeBytes:   staged.sizeBytes,
 		ContentType: staged.detectedMIME,
 	}); err != nil {

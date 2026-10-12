@@ -1,4 +1,4 @@
-.PHONY: build run test lint fmt swagger tidy sync-version check-version
+.PHONY: build run test lint fmt swagger tidy sync-version check-version catalog-snapshot
 
 VERSION ?= $(shell cat ../VERSION 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -32,3 +32,8 @@ swagger:
 
 tidy:
 	go mod tidy
+
+# 刷新随二进制内置的 models.dev 推理目录快照（发版前执行）。
+# 刷新随二进制发布的外部目录快照（models.dev 模型目录、OpenRouter 官方定价）。
+catalog-snapshot:
+	go run ./cmd/catalog-snapshot

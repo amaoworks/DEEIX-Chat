@@ -19,6 +19,7 @@ var allowedKeys = map[string]string{
 	"chat.show_model_info":                      "true",
 	"chat.show_latency":                         "true",
 	"chat.show_billing_cost":                    "true",
+	"chat.show_process_trace":                   "true",
 	"chat.default_model":                        "",
 	"chat.auto_generate_title":                  "true",
 	"chat.auto_generate_labels":                 "true",
@@ -34,6 +35,7 @@ var allowedKeys = map[string]string{
 	"chat.input_height":                         "standard",
 	"chat.content_width":                        "compact",
 	"chat.default_mcp_tool_ids":                 "[]",
+	"chat.model_control_placements":             "{}",
 }
 
 // boolKeys 取值只能是 "true" / "false"。
@@ -42,6 +44,7 @@ var boolKeys = map[string]bool{
 	"chat.show_model_info":                      true,
 	"chat.show_latency":                         true,
 	"chat.show_billing_cost":                    true,
+	"chat.show_process_trace":                   true,
 	"chat.auto_generate_title":                  true,
 	"chat.auto_generate_labels":                 true,
 	"chat.delete_conversation_files_by_default": true,
@@ -67,6 +70,9 @@ var enumKeys = map[string]map[string]bool{
 func validateValue(key, value string) error {
 	if key == "chat.default_mcp_tool_ids" {
 		return validateDefaultMCPToolIDs(value, key)
+	}
+	if key == modelControlPlacementsKey {
+		return validateModelControlPlacements(value, key)
 	}
 	if boolKeys[key] {
 		if value != "true" && value != "false" {
@@ -97,6 +103,42 @@ func validateDefaultMCPToolIDs(value string, key string) error {
 		if id == 0 {
 			return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: tool IDs must be positive integers", key))
 		}
+	}
+	return nil
+}
+
+// modelControlPlacementsKey 保存用户对模型控件位置的调整：{控件 id: "toolbar" | "menu"}，
+// 未出现的控件使用管理员配置的默认位置。按控件 id 跨模型生效，与模型无关。
+const modelControlPlacementsKey = "chat.model_control_placements"
+
+// maxPinnedModelControls 是用户可固定到输入框工具栏的控件上限。
+const maxPinnedModelControls = 6
+
+const maxModelControlPlacementEntries = 128
+
+func validateModelControlPlacements(value string, key string) error {
+	var placements map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(value)), &placements); err != nil {
+		return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: must be a JSON object of control placements", key))
+	}
+	if len(placements) > maxModelControlPlacementEntries {
+		return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: must contain at most %d controls", key, maxModelControlPlacementEntries))
+	}
+	pinned := 0
+	for id, placement := range placements {
+		if strings.TrimSpace(id) == "" || len(id) > 96 {
+			return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: control ids must be 1-96 characters", key))
+		}
+		switch placement {
+		case "toolbar":
+			pinned++
+		case "menu":
+		default:
+			return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: placement must be 'toolbar' or 'menu'", key))
+		}
+	}
+	if pinned > maxPinnedModelControls {
+		return settingValidationError(ErrInvalidSettingValue, fmt.Sprintf("invalid value for %s: at most %d controls can be pinned", key, maxPinnedModelControls))
 	}
 	return nil
 }

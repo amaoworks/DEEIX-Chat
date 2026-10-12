@@ -54,8 +54,8 @@ trap 'exit 143' HUP TERM
 API_PID=$!
 
 (
-  cd "$PROJECT_DIR/frontend"
-  PATH="$PROJECT_DIR/frontend/node_modules/.bin:$PATH"
+  cd "$PROJECT_DIR/apps/web"
+  PATH="$PROJECT_DIR/apps/web/node_modules/.bin:$PATH"
   export PATH
   exec "$PROJECT_DIR/scripts/dev-web.sh"
 ) &
