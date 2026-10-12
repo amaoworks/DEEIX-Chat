@@ -84,22 +84,22 @@ func lockedCredential(t *testing.T, password string, lockedUntil time.Time, stat
 	}
 	locked := lockedUntil
 	return &loginLockRepo{
-		userItem: &user.User{ID: 7, Username: "locked-user", Status: status},
-		credential: &user.Credential{
-			ID:               11,
-			UserID:           7,
-			PasswordHash:     string(hash),
-			PasswordEnabled:  true,
-			FailedLoginCount: 5,
-			LockedUntil:      &locked,
-		},
-	}, config.Config{
-		UsernameLoginEnabled: true,
-		EmailLoginEnabled:    true,
-		LoginMaxFailures:     5,
-		LoginLockMinutes:     15,
-		JWTSecret:            "test-secret",
-	}
+			userItem: &user.User{ID: 7, Username: "locked-user", Status: status},
+			credential: &user.Credential{
+				ID:               11,
+				UserID:           7,
+				PasswordHash:     string(hash),
+				PasswordEnabled:  true,
+				FailedLoginCount: 5,
+				LockedUntil:      &locked,
+			},
+		}, config.Config{
+			UsernameLoginEnabled: true,
+			EmailLoginEnabled:    true,
+			LoginMaxFailures:     5,
+			LoginLockMinutes:     15,
+			JWTSecret:            "test-secret",
+		}
 }
 
 func TestLoginLockPolicyHonorsDisabledConfiguration(t *testing.T) {
