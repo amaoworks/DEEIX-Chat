@@ -143,9 +143,7 @@ def output_owner() -> tuple[int, int] | None:
 def provision() -> None:
     base_url = env("VOCECHAT_URL", "http://vocechat:3000")
     secret_path = Path(env("VOCECHAT_SECRET_PATH", "/run/secrets/vocechat/third-party-secret"))
-    credential_path = Path(
-        env("VOCECHAT_CREDENTIAL_PATH", "/var/lib/deeix-vocechat-init/administrator.json")
-    )
+    credential_path = Path(env("VOCECHAT_CREDENTIAL_PATH", "/var/lib/deeix-vocechat-init/administrator.json"))
     api = VoceChatAPI(base_url, float(env("VOCECHAT_REQUEST_TIMEOUT_SECONDS", "10")))
     wait_until_healthy(api, int(env("VOCECHAT_WAIT_SECONDS", "120")))
 
@@ -202,9 +200,7 @@ def provision() -> None:
         headers=headers,
     )
     if not isinstance(third_party_secret, str) or not third_party_secret.strip():
-        third_party_secret = api.request(
-            "POST", "/api/admin/system/third_party_secret", headers=headers
-        )
+        third_party_secret = api.request("POST", "/api/admin/system/third_party_secret", headers=headers)
     if not isinstance(third_party_secret, str) or not third_party_secret.strip():
         raise RuntimeError("VoceChat returned an empty third-party secret")
 

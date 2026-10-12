@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"strings"
 	"time"
 
 	appbilling "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/billing"
@@ -148,6 +149,22 @@ func toModelResponse(v appchannel.ModelView) ModelResponse {
 		CreatedAt:          v.CreatedAt,
 		UpdatedAt:          v.UpdatedAt,
 	}
+}
+
+// optionalPositiveInt 把 0 与负数视为未知，返回 nil。
+func optionalPositiveInt(value int) *int {
+	if value <= 0 {
+		return nil
+	}
+	return &value
+}
+
+func optionalTrimmedString(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
 }
 
 // UpstreamModelResponse 上游模型路由绑定响应 DTO。
@@ -425,6 +442,9 @@ type UpstreamModelSyncPlanResponse struct {
 	InactivatedModels []string `json:"inactivatedModels"`
 	UnchangedModels   []string `json:"unchangedModels"`
 	ProtectedModels   []string `json:"protectedModels"`
+	// UnresolvedProtocolModels 为同步后没有建议协议的远端模型：模型类型推断不出协议，需要为上游设置对应默认协议，
+	// 或绑定时手动选择。它们仍会写入目录，与上面的分类不互斥。
+	UnresolvedProtocolModels []string `json:"unresolvedProtocolModels"`
 }
 
 func toUpstreamRemoteModelsResponse(d appchannel.UpstreamRemoteModelsData) UpstreamRemoteModelsResponse {
@@ -448,12 +468,13 @@ func toUpstreamRemoteModelsResponse(d appchannel.UpstreamRemoteModelsData) Upstr
 		Items:      items,
 		SnapshotID: d.SnapshotID,
 		SyncPlan: UpstreamModelSyncPlanResponse{
-			AddedModels:       stringList(d.SyncPlan.AddedModels),
-			UpdatedModels:     stringList(d.SyncPlan.UpdatedModels),
-			ReactivatedModels: stringList(d.SyncPlan.ReactivatedModels),
-			InactivatedModels: stringList(d.SyncPlan.InactivatedModels),
-			UnchangedModels:   stringList(d.SyncPlan.UnchangedModels),
-			ProtectedModels:   stringList(d.SyncPlan.ProtectedModels),
+			AddedModels:              stringList(d.SyncPlan.AddedModels),
+			UpdatedModels:            stringList(d.SyncPlan.UpdatedModels),
+			ReactivatedModels:        stringList(d.SyncPlan.ReactivatedModels),
+			InactivatedModels:        stringList(d.SyncPlan.InactivatedModels),
+			UnchangedModels:          stringList(d.SyncPlan.UnchangedModels),
+			ProtectedModels:          stringList(d.SyncPlan.ProtectedModels),
+			UnresolvedProtocolModels: stringList(d.SyncPlan.UnresolvedProtocolModels),
 		},
 	}
 }
@@ -491,6 +512,8 @@ type SyncUpstreamModelsResponse struct {
 	InactivatedModels       int64                       `json:"inactivatedModels"`
 	ReactivatedModels       int                         `json:"reactivatedModels"`
 	SyncedModels            []UpstreamSyncModelResponse `json:"syncedModels"`
+	// UnresolvedProtocolModels 为写入目录但没有建议协议的远端模型，含义同同步计划中的同名字段。
+	UnresolvedProtocolModels []string `json:"unresolvedProtocolModels"`
 }
 
 func toSyncUpstreamModelsResponse(d appchannel.SyncUpstreamModelsData) SyncUpstreamModelsResponse {
@@ -509,17 +532,18 @@ func toSyncUpstreamModelsResponse(d appchannel.SyncUpstreamModelsData) SyncUpstr
 		})
 	}
 	return SyncUpstreamModelsResponse{
-		SnapshotID:              d.SnapshotID,
-		TotalUpstream:           d.TotalUpstream,
-		CreatedUpstreamModels:   d.CreatedUpstreamModels,
-		UpdatedUpstreamModels:   d.UpdatedUpstreamModels,
-		UnchangedUpstreamModels: d.UnchangedUpstreamModels,
-		ProtectedUpstreamModels: d.ProtectedUpstreamModels,
-		ExistingUpstreamModels:  d.ExistingUpstreamModels,
-		SkippedUpstreamModels:   d.SkippedUpstreamModels,
-		InactivatedModels:       d.InactivatedModels,
-		ReactivatedModels:       d.ReactivatedModels,
-		SyncedModels:            models,
+		SnapshotID:               d.SnapshotID,
+		TotalUpstream:            d.TotalUpstream,
+		CreatedUpstreamModels:    d.CreatedUpstreamModels,
+		UpdatedUpstreamModels:    d.UpdatedUpstreamModels,
+		UnchangedUpstreamModels:  d.UnchangedUpstreamModels,
+		ProtectedUpstreamModels:  d.ProtectedUpstreamModels,
+		ExistingUpstreamModels:   d.ExistingUpstreamModels,
+		SkippedUpstreamModels:    d.SkippedUpstreamModels,
+		InactivatedModels:        d.InactivatedModels,
+		ReactivatedModels:        d.ReactivatedModels,
+		SyncedModels:             models,
+		UnresolvedProtocolModels: stringList(d.UnresolvedProtocolModels),
 	}
 }
 
@@ -649,6 +673,96 @@ type PublicModelResponse struct {
 	Description       string                      `json:"description"`
 	SortOrder         int                         `json:"sortOrder"`
 	Pricing           *PublicModelPricingResponse `json:"pricing" extensions:"x-nullable,!x-omitempty"`
+	// Reasoning 是后端归一化的推理强度能力（显式声明或由旧版参数控件推断）；无能力时为 null。
+	Reasoning *PublicModelReasoningResponse `json:"reasoning" extensions:"x-nullable,!x-omitempty"`
+	// Controls 是用户端可操作的模型控件（管理员隐藏的控件不下发），顺序即展示顺序。
+	// 用户请求只提交 {控件 id: 取值}，参数片段只保存在服务端。
+	Controls []PublicModelControlResponse `json:"controls"`
+	// InputModalities 是模型可接收的输入模态（text / image / pdf / audio / video），按规范顺序排列；
+	// 能力未知时为空数组。它描述模型本身的能力，实际是否原生发送还取决于接入协议与大小限制，由服务端决定。
+	InputModalities []string `json:"inputModalities"`
+	// InputModalitiesSource 为输入模态来源：explicit 为管理员在能力 JSON 中声明，catalog 为 models.dev 目录；未知时为 null。
+	InputModalitiesSource *string `json:"inputModalitiesSource" enums:"explicit,catalog" extensions:"x-nullable,!x-omitempty"`
+	// OutputModalities 为 models.dev 目录声明的输出模态（text / image / audio / video …），仅用于展示；未知时为空数组。
+	OutputModalities []string `json:"outputModalities"`
+	// ContextWindow 为上下文窗口（Token）：能力 JSON 显式配置优先，其次 models.dev 目录；未知时为 null。
+	ContextWindow *int `json:"contextWindow" extensions:"x-nullable,!x-omitempty"`
+}
+
+// PublicModelControlResponse 是一个用户端模型控件。
+type PublicModelControlResponse struct {
+	ID string `json:"id"`
+	// Kind 为 reasoning 时是统一思考强度控件，选项为规范档位（目录来源另有 auto）。
+	Kind        string `json:"kind" enums:"generic,reasoning"`
+	Type        string `json:"type" enums:"select,toggle,number"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	// Icon 为 lucide 图标名（kebab-case）；为空时由客户端按类型选择通用图标。
+	Icon      string `json:"icon"`
+	Placement string `json:"placement" enums:"toolbar,menu"`
+	// Default 为默认取值：select 为选项值，toggle 为 on/off，number 为十进制数值；为 null 表示不修改参数。
+	Default *string `json:"default" extensions:"x-nullable,!x-omitempty"`
+	// Locked 为 true 时固定使用默认值，客户端只展示不可修改。
+	Locked  bool                               `json:"locked"`
+	Options []PublicModelControlOptionResponse `json:"options"`
+	Min     *float64                           `json:"min" extensions:"x-nullable,!x-omitempty"`
+	Max     *float64                           `json:"max" extensions:"x-nullable,!x-omitempty"`
+	Step    *float64                           `json:"step" extensions:"x-nullable,!x-omitempty"`
+	Integer bool                               `json:"integer"`
+	// Protocols 非空时控件只在这些协议键上生效。
+	Protocols []string `json:"protocols"`
+}
+
+// PublicModelControlOptionResponse 是 select / toggle 控件的一个选项。
+type PublicModelControlOptionResponse struct {
+	Value       string `json:"value"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+func toPublicModelControlResponses(controls []domainchannel.ModelControl) []PublicModelControlResponse {
+	result := make([]PublicModelControlResponse, 0, len(controls))
+	for _, control := range controls {
+		if control.Hidden {
+			continue
+		}
+		options := make([]PublicModelControlOptionResponse, 0, len(control.Options))
+		for _, option := range control.Options {
+			options = append(options, PublicModelControlOptionResponse{Value: option.Value, Label: option.Label, Description: option.Description})
+		}
+		result = append(result, PublicModelControlResponse{
+			ID:          control.ID,
+			Kind:        control.Kind,
+			Type:        control.Type,
+			Label:       control.Label,
+			Description: control.Description,
+			Icon:        control.Icon,
+			Placement:   control.Placement,
+			Default:     optionalTrimmedString(control.Default),
+			Locked:      control.Locked,
+			Options:     options,
+			Min:         control.Min,
+			Max:         control.Max,
+			Step:        control.Step,
+			Integer:     control.Integer,
+			Protocols:   append([]string{}, control.Protocols...),
+		})
+	}
+	return result
+}
+
+// PublicModelReasoningResponse 面向聊天模型选择器的推理强度能力 DTO。
+type PublicModelReasoningResponse struct {
+	// Levels 为可选规范档位，按由低到高排列。
+	Levels []string `json:"levels" enums:"none,minimal,low,medium,high,xhigh,max"`
+	// Default 为未显式选择时使用的档位。
+	Default string `json:"default" enums:"none,minimal,low,medium,high,xhigh,max"`
+	// ControlPath 为推断来源的原生参数路径（高级参数面板需隐藏该控件）；显式声明时为 null。
+	ControlPath *string `json:"controlPath" extensions:"x-nullable,!x-omitempty"`
+	// Source 为能力来源。catalog 表示由 models.dev 目录自动识别：未显式选择档位时不下发推理参数，由上游决定默认行为。
+	Source string `json:"source" enums:"explicit,inferred,catalog"`
+	// Locked 为 true 时档位被管理员锁定为 default，客户端传入的档位不生效。
+	Locked bool `json:"locked"`
 }
 
 // PublicModelPricingResponse 面向前端的模型价格 DTO。
@@ -689,7 +803,125 @@ type PublicModelPricingTierResponse struct {
 	OutputUSDPerMTokens     float64 `json:"outputUSDPerMTokens"`
 }
 
+// ModelCatalogStatusResponse 是 models.dev 模型目录状态 DTO。
+type ModelCatalogStatusResponse struct {
+	// Origin 为当前目录数据来源：remote 为远端同步（含本地缓存恢复），builtin 为随版本发布的内置快照；无目录时为 null。
+	Origin *string `json:"origin" enums:"remote,builtin" extensions:"x-nullable,!x-omitempty"`
+	// FetchedAt 为目录数据的拉取时间（RFC3339）；无目录时为 null。
+	FetchedAt *string `json:"fetchedAt" extensions:"x-nullable,!x-omitempty"`
+	// ModelCount 为目录中的模型条目总数（含推理能力、模态与上下文窗口信息）。
+	ModelCount int `json:"modelCount"`
+	// LastError 为最近一次同步失败的原因；最近一次同步成功时为 null。
+	LastError *string `json:"lastError" extensions:"x-nullable,!x-omitempty"`
+	// Refreshing 表示目录正在同步（按需后台同步或手动同步）。
+	Refreshing bool `json:"refreshing"`
+}
+
+func toModelCatalogStatusResponse(v appchannel.ModelCatalogStatus) ModelCatalogStatusResponse {
+	var fetchedAt *string
+	if v.FetchedAt != nil {
+		formatted := v.FetchedAt.UTC().Format(time.RFC3339)
+		fetchedAt = &formatted
+	}
+	return ModelCatalogStatusResponse{
+		Origin:     optionalTrimmedString(v.Origin),
+		FetchedAt:  fetchedAt,
+		ModelCount: v.ModelCount,
+		LastError:  optionalTrimmedString(v.LastError),
+		Refreshing: v.Refreshing,
+	}
+}
+
+// ModelCatalogResolveResponse 是模型编辑表单的自动识别结果。
+type ModelCatalogResolveResponse struct {
+	// Matched 表示 models.dev 目录中找到了对应条目；未找到时模态为空数组，请求链路按「未知」处理。
+	Matched bool `json:"matched"`
+	// Provider 与 ModelID 为命中的目录条目；未匹配时为 null。
+	Provider *string `json:"provider" extensions:"x-nullable,!x-omitempty"`
+	ModelID  *string `json:"modelId" extensions:"x-nullable,!x-omitempty"`
+	// InputModalities / OutputModalities 为目录声明的输入、输出模态（text / image / pdf / audio / video）。
+	InputModalities  []string `json:"inputModalities"`
+	OutputModalities []string `json:"outputModalities"`
+	// ContextWindow 为目录声明的上下文窗口（Token）；未知时为 null。
+	ContextWindow *int `json:"contextWindow" extensions:"x-nullable,!x-omitempty"`
+	// Reasoning 为不考虑显式 reasoning 声明时的推理能力（旧版思考参数推断或目录识别）；无能力时为 null。
+	Reasoning *ModelCatalogReasoningResponse `json:"reasoning" extensions:"x-nullable,!x-omitempty"`
+	// ReasoningTemplate 为自定义推理强度的编辑模板；尚未配置路由协议且无能力时为 null。
+	ReasoningTemplate *ModelReasoningTemplateResponse `json:"reasoningTemplate" extensions:"x-nullable,!x-omitempty"`
+}
+
+// ModelCatalogReasoningResponse 是自动识别的推理能力。
+type ModelCatalogReasoningResponse struct {
+	Format string `json:"format" enums:"openai,anthropic_effort,anthropic_budget,gemini_level,gemini_budget,qwen,toggle"`
+	// Levels 为可选规范档位，按由低到高排列。
+	Levels []string `json:"levels" enums:"none,minimal,low,medium,high,xhigh,max"`
+	// Default 为未显式选择时使用的档位。
+	Default string `json:"default" enums:"none,minimal,low,medium,high,xhigh,max"`
+	// Source 为 inferred（由旧版思考参数推断）或 catalog（models.dev 目录）。
+	Source string `json:"source" enums:"inferred,catalog"`
+}
+
+// ModelReasoningTemplateResponse 是自定义推理强度的编辑模板：在 Levels 中勾选档位并指定默认档，
+// 预算类格式按 Budgets 写入对应档位的预算。
+type ModelReasoningTemplateResponse struct {
+	Format string `json:"format" enums:"openai,anthropic_effort,anthropic_budget,gemini_level,gemini_budget,qwen,toggle"`
+	// Levels 为该格式可声明的规范档位，按由低到高排列。
+	Levels []string `json:"levels" enums:"none,minimal,low,medium,high,xhigh,max"`
+	// Budgets 为各档位的建议预算（Token），仅预算类格式非 null。
+	Budgets map[string]int `json:"budgets" extensions:"x-nullable,!x-omitempty"`
+}
+
+func toModelCatalogResolveResponse(v appchannel.ModelCatalogResolution) ModelCatalogResolveResponse {
+	result := ModelCatalogResolveResponse{
+		Matched:          v.Matched,
+		InputModalities:  append([]string{}, v.InputModalities...),
+		OutputModalities: append([]string{}, v.OutputModalities...),
+	}
+	if v.Matched {
+		result.Provider = optionalTrimmedString(v.Provider)
+		result.ModelID = optionalTrimmedString(v.ModelID)
+	}
+	if v.ContextWindow > 0 {
+		contextWindow := v.ContextWindow
+		result.ContextWindow = &contextWindow
+	}
+	if v.AutoReasoning != nil {
+		result.Reasoning = &ModelCatalogReasoningResponse{
+			Format:  v.AutoReasoning.Format,
+			Levels:  append([]string{}, v.AutoReasoning.Levels...),
+			Default: v.AutoReasoning.Default,
+			Source:  v.AutoReasoningSource,
+		}
+	}
+	if v.ReasoningTemplate != nil {
+		template := &ModelReasoningTemplateResponse{
+			Format: v.ReasoningTemplate.Format,
+			Levels: append([]string{}, v.ReasoningTemplate.Levels...),
+		}
+		if len(v.ReasoningTemplate.Budgets) > 0 {
+			template.Budgets = make(map[string]int, len(v.ReasoningTemplate.Budgets))
+			for level, budget := range v.ReasoningTemplate.Budgets {
+				template.Budgets[level] = budget
+			}
+		}
+		result.ReasoningTemplate = template
+	}
+	return result
+}
+
 // ---------- Swagger 文档类型 ----------
+
+// ModelCatalogResolveResponseDoc 模型编辑表单自动识别响应文档。
+type ModelCatalogResolveResponseDoc struct {
+	ErrorMsg string                      `json:"errorMsg"`
+	Data     ModelCatalogResolveResponse `json:"data"`
+}
+
+// ModelCatalogStatusResponseDoc models.dev 模型目录状态响应文档。
+type ModelCatalogStatusResponseDoc struct {
+	ErrorMsg string                     `json:"errorMsg"`
+	Data     ModelCatalogStatusResponse `json:"data"`
+}
 
 // UpstreamListResponseDoc 上游分页响应文档。
 type UpstreamListResponseDoc struct {
@@ -839,22 +1071,46 @@ func toLLMSettingResponse(v domainchannel.LLMSetting) LLMSettingResponse {
 }
 
 // toPublicModelResponse 将模型视图转为面向前端的响应 DTO。
-func toPublicModelResponse(v appchannel.ModelView) PublicModelResponse {
+func toPublicModelResponse(v appchannel.ModelView, resolver appchannel.ModelCapabilityResolver) PublicModelResponse {
+	reasoning := resolver.Resolve(v)
 	return PublicModelResponse{
-		PlatformModelName: v.PlatformModelName,
-		Vendor:            v.Vendor,
-		VendorName:        v.VendorName,
-		VendorIcon:        v.VendorIcon,
-		DisplayGroupID:    v.DisplayGroupID,
-		DisplayGroupName:  v.DisplayGroupName,
-		DisplayGroupIcon:  v.DisplayGroupIcon,
-		KindsJSON:         v.KindsJSON,
-		Icon:              v.Icon,
-		ProtocolsJSON:     v.ProtocolsJSON,
-		CapabilitiesJSON:  v.CapabilitiesJSON,
-		Description:       v.Description,
-		SortOrder:         v.SortOrder,
-		Pricing:           toPublicModelPricingResponse(v.Pricing),
+		PlatformModelName:     v.PlatformModelName,
+		Vendor:                v.Vendor,
+		VendorName:            v.VendorName,
+		VendorIcon:            v.VendorIcon,
+		DisplayGroupID:        v.DisplayGroupID,
+		DisplayGroupName:      v.DisplayGroupName,
+		DisplayGroupIcon:      v.DisplayGroupIcon,
+		KindsJSON:             v.KindsJSON,
+		Icon:                  v.Icon,
+		ProtocolsJSON:         v.ProtocolsJSON,
+		CapabilitiesJSON:      v.CapabilitiesJSON,
+		Description:           v.Description,
+		SortOrder:             v.SortOrder,
+		Pricing:               toPublicModelPricingResponse(v.Pricing),
+		Reasoning:             toPublicModelReasoningResponse(reasoning.View),
+		Controls:              toPublicModelControlResponses(reasoning.Controls),
+		InputModalities:       append([]string{}, reasoning.InputModalities.Values...),
+		InputModalitiesSource: optionalTrimmedString(reasoning.InputModalities.Source),
+		OutputModalities:      append([]string{}, reasoning.OutputModalities...),
+		ContextWindow:         optionalPositiveInt(reasoning.ContextWindow),
+	}
+}
+
+func toPublicModelReasoningResponse(v *appchannel.ModelReasoningView) *PublicModelReasoningResponse {
+	if v == nil {
+		return nil
+	}
+	var controlPath *string
+	if path := strings.TrimSpace(v.ControlPath); path != "" {
+		controlPath = &path
+	}
+	return &PublicModelReasoningResponse{
+		Levels:      append([]string{}, v.Levels...),
+		Default:     v.Default,
+		ControlPath: controlPath,
+		Source:      v.Source,
+		Locked:      v.Locked,
 	}
 }
 

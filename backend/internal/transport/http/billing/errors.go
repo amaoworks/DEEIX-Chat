@@ -3,7 +3,7 @@ package billing
 import "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/apperr"
 
 // 由 transport 层直接判定的请求错误（路径参数、必填校验、运行时依赖缺失等）。
-// 错误码与文案是前端依赖的 API 契约，改动需同步 frontend/i18n/messages/*/errors.json。
+// 错误码与文案是前端依赖的 API 契约，改动需同步 apps/web/i18n/messages/*/errors.json。
 var (
 	errInvalidDailyUsageDateRange  = apperr.New("billing.invalid_daily_usage_date_range", "invalid daily usage date range")
 	errInvalidDailyUsageDays       = apperr.New("billing.invalid_daily_usage_days", "invalid daily usage days")
@@ -21,4 +21,10 @@ var (
 	errStripeWebhookNotConfigured  = apperr.New("payment.webhook_not_configured", "stripe webhook is not configured")
 	errUpstreamServiceUnavailable  = apperr.New("upstream.unavailable", "upstream service unavailable")
 	errWebhookBodyTooLarge         = apperr.New("payment.webhook_body_too_large", "webhook body too large")
+)
+
+// 客户端传入的 return_url 校验失败属于请求错误（400），与公开地址未配置等服务端问题区分开。
+var (
+	errPaymentReturnURLInvalid     = apperr.New("payment.return_url_invalid", "payment return url is invalid")
+	errPaymentReturnURLCrossOrigin = apperr.New("payment.return_url_cross_origin", "payment return url must use the configured public web origin")
 )

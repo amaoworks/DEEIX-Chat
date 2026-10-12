@@ -1325,6 +1325,102 @@ definitions:
     - data
     - errorMsg
     type: object
+  Capabilities:
+    properties:
+      accountSecurity:
+        description: AccountSecurity 密码、邮箱、两步验证、会话、注销账号。
+        type: boolean
+      announcements:
+        description: Announcements 系统公告。
+        type: boolean
+      billingGating:
+        description: BillingGating 计费规则可以拒绝请求：套餐、余额、兑换码、支付。
+        type: boolean
+      contentModeration:
+        description: ContentModeration 内容审核。
+        type: boolean
+      identityProviders:
+        description: IdentityProviders 第三方登录与身份绑定。
+        type: boolean
+      multiUser:
+        description: MultiUser 存在多个账号：账号管理、权限组。
+        type: boolean
+      registration:
+        description: Registration 可自行注册账号。
+        type: boolean
+      sharing:
+        description: Sharing 对话公开分享链接；只监听回环的服务器没有可分享的对象。
+        type: boolean
+      usageMetering:
+        description: UsageMetering 记录用量与费用。
+        type: boolean
+    required:
+    - accountSecurity
+    - announcements
+    - billingGating
+    - contentModeration
+    - identityProviders
+    - multiUser
+    - registration
+    - sharing
+    - usageMetering
+    type: object
+  CapabilitiesResponse:
+    properties:
+      features:
+        $ref: '#/definitions/Capabilities'
+    required:
+    - features
+    type: object
+  CapabilitiesResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/CapabilitiesResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  ChangePasswordRequest:
+    properties:
+      code:
+        maxLength: 32
+        minLength: 6
+        type: string
+      currentPassword:
+        maxLength: 128
+        type: string
+      newPassword:
+        maxLength: 128
+        minLength: 8
+        type: string
+      verificationMethod:
+        enum:
+        - none
+        - two_factor
+        - email
+        type: string
+    required:
+    - newPassword
+    type: object
+  ChangePasswordResponse:
+    properties:
+      changed:
+        type: boolean
+    required:
+    - changed
+    type: object
+  ChangePasswordResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/ChangePasswordResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
   ChannelErrorDoc:
     properties:
       data: {}
@@ -1334,6 +1430,64 @@ definitions:
       errorMsg:
         type: string
       requestId:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  ChatFilePolicyResponse:
+    properties:
+      allowedMIMETypes:
+        items:
+          type: string
+        type: array
+      capabilityMode:
+        type: string
+      docMaxBytes:
+        type: integer
+      effectiveDocMaxBytes:
+        type: integer
+      effectiveImageMaxBytes:
+        type: integer
+      fileMode:
+        type: string
+      fullContextMaxBytes:
+        type: integer
+      fullContextMaxTokens:
+        type: integer
+      fullContextPDFMaxPages:
+        type: integer
+      imageMaxBytes:
+        type: integer
+      maxMessageFiles:
+        type: integer
+      maxUploadFileBytes:
+        type: integer
+      ragAvailabilityReason:
+        type: string
+      ragAvailable:
+        type: boolean
+    required:
+    - allowedMIMETypes
+    - capabilityMode
+    - docMaxBytes
+    - effectiveDocMaxBytes
+    - effectiveImageMaxBytes
+    - fileMode
+    - fullContextMaxBytes
+    - fullContextMaxTokens
+    - fullContextPDFMaxPages
+    - imageMaxBytes
+    - maxMessageFiles
+    - maxUploadFileBytes
+    - ragAvailabilityReason
+    - ragAvailable
+    type: object
+  ChatFilePolicyResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/ChatFilePolicyResponse'
+      errorMsg:
         type: string
     required:
     - data
@@ -1410,37 +1564,6 @@ definitions:
         type: boolean
     required:
     - reset
-    type: object
-  CleanupConversationRunsRequest:
-    properties:
-      runIDs:
-        items:
-          type: string
-        maxItems: 100
-        minItems: 1
-        type: array
-    required:
-    - runIDs
-    type: object
-  CleanupConversationRunsResponse:
-    properties:
-      deletedCount:
-        type: integer
-      runCount:
-        type: integer
-    required:
-    - deletedCount
-    - runCount
-    type: object
-  CleanupConversationRunsResponseDoc:
-    properties:
-      data:
-        $ref: '#/definitions/CleanupConversationRunsResponse'
-      errorMsg:
-        type: string
-    required:
-    - data
-    - errorMsg
     type: object
   CleanupLogsRequest:
     properties:
@@ -1857,6 +1980,20 @@ definitions:
         type: integer
       timeoutSeconds:
         type: integer
+    type: object
+  ContentmoderationErrorDoc:
+    properties:
+      data: {}
+      details: {}
+      errorCode:
+        type: string
+      errorMsg:
+        type: string
+      requestId:
+        type: string
+    required:
+    - data
+    - errorMsg
     type: object
   ContextArtifactResponse:
     properties:
@@ -3102,6 +3239,23 @@ definitions:
     - data
     - errorMsg
     type: object
+  DeleteUserIdentityResponse:
+    properties:
+      deleted:
+        type: boolean
+    required:
+    - deleted
+    type: object
+  DeleteUserIdentityResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/DeleteUserIdentityResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
   DeleteUserResponse:
     properties:
       deleted:
@@ -3118,6 +3272,36 @@ definitions:
     required:
     - data
     - errorMsg
+    type: object
+  EmailBootstrapCompleteRequest:
+    properties:
+      code:
+        type: string
+      email:
+        maxLength: 128
+        type: string
+    required:
+    - email
+    type: object
+  EmailChangeCompleteRequest:
+    properties:
+      currentCode:
+        maxLength: 32
+        minLength: 6
+        type: string
+      currentVerificationMethod:
+        enum:
+        - none
+        - two_factor
+        - email
+        type: string
+      email:
+        maxLength: 128
+        type: string
+      newCode:
+        type: string
+    required:
+    - email
     type: object
   EmailRegistrationCompleteRequest:
     properties:
@@ -3167,6 +3351,21 @@ definitions:
     required:
     - data
     - errorMsg
+    type: object
+  EmailVerificationCompleteRequest:
+    properties:
+      code:
+        type: string
+    required:
+    - code
+    type: object
+  EmailVerificationStartRequest:
+    properties:
+      email:
+        maxLength: 128
+        type: string
+    required:
+    - email
     type: object
   EmailVerificationStartResponse:
     properties:
@@ -3266,6 +3465,34 @@ definitions:
     - data
     - errorMsg
     type: object
+  FeaturePolicyResponse:
+    properties:
+      desktopDownloadEnabled:
+        description: DesktopDownloadEnabled 为 true 时网页端用户菜单展示「下载桌面端」入口；桌面端内由前端自行隐藏。
+        type: boolean
+      desktopDownloadURL:
+        description: DesktopDownloadURL 为桌面端下载页地址；入口关闭时为空串。
+        type: string
+      knowledgeBaseEnabled:
+        type: boolean
+      processTraceEnabled:
+        type: boolean
+    required:
+    - desktopDownloadEnabled
+    - desktopDownloadURL
+    - knowledgeBaseEnabled
+    - processTraceEnabled
+    type: object
+  FeaturePolicyResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/FeaturePolicyResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
   FileEmbeddingSkipResponse:
     properties:
       fileID:
@@ -3294,6 +3521,38 @@ definitions:
     properties:
       data:
         $ref: '#/definitions/FileEmbeddingSubmissionResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  FileExtractResponse:
+    properties:
+      extractChars:
+        type: integer
+      extractPages:
+        type: integer
+      extractText:
+        type: string
+      fileID:
+        type: string
+      ocrUsed:
+        type: boolean
+      previewText:
+        type: string
+    required:
+    - extractChars
+    - extractPages
+    - extractText
+    - fileID
+    - ocrUsed
+    - previewText
+    type: object
+  FileExtractResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/FileExtractResponse'
       errorMsg:
         type: string
     required:
@@ -3478,6 +3737,16 @@ definitions:
     - startedAt
     - updatedAt
     - vectorizationReason
+    type: object
+  FileProcessingStatusResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/FileProcessingStatusResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
     type: object
   FileUpdateResponseDoc:
     properties:
@@ -4208,6 +4477,13 @@ definitions:
     required:
     - errorMsg
     type: object
+  LocalGrantExchangeRequest:
+    properties:
+      grant:
+        type: string
+    required:
+    - grant
+    type: object
   LoginOptionsResponse:
     properties:
       emailEnabled:
@@ -4272,6 +4548,11 @@ definitions:
       expiresAt:
         type: string
       refreshExpiresAt:
+        type: string
+      refreshToken:
+        description: |-
+          RefreshToken 仅在原生客户端（X-Client-Platform: desktop|mobile）请求时填充，
+          由客户端存入系统 keychain / SecureStore；浏览器响应中始终为空。
         type: string
       sessionID:
         type: string
@@ -4344,6 +4625,42 @@ definitions:
     - data
     - errorMsg
     type: object
+  MediaImageRequest:
+    properties:
+      branchReason:
+        enum:
+        - default
+        - retry
+        - edit
+        type: string
+      clientRunID:
+        maxLength: 64
+        type: string
+      fileIDs:
+        items:
+          type: string
+        maxItems: 20
+        type: array
+      maskFileID:
+        maxLength: 128
+        type: string
+      model:
+        maxLength: 128
+        type: string
+      options:
+        additionalProperties: {}
+        type: object
+      parentMessagePublicID:
+        maxLength: 32
+        type: string
+      prompt:
+        type: string
+      sourceMessagePublicID:
+        maxLength: 32
+        type: string
+    required:
+    - prompt
+    type: object
   MediaVideoExtensionRequest:
     properties:
       branchReason:
@@ -4375,6 +4692,39 @@ definitions:
     required:
     - prompt
     - sourceVideoFileID
+    type: object
+  MediaVideoRequest:
+    properties:
+      branchReason:
+        enum:
+        - default
+        - retry
+        - edit
+        type: string
+      clientRunID:
+        maxLength: 64
+        type: string
+      fileIDs:
+        items:
+          type: string
+        maxItems: 1
+        type: array
+      model:
+        maxLength: 128
+        type: string
+      options:
+        additionalProperties: {}
+        type: object
+      parentMessagePublicID:
+        maxLength: 32
+        type: string
+      prompt:
+        type: string
+      sourceMessagePublicID:
+        maxLength: 32
+        type: string
+    required:
+    - prompt
     type: object
   MemoryErrorDoc:
     properties:
@@ -4465,6 +4815,8 @@ definitions:
       fileID:
         type: string
       fileName:
+        type: string
+      modality:
         type: string
       preview:
         type: string
@@ -4669,6 +5021,19 @@ definitions:
         $ref: '#/definitions/MessageProcessTraceResponse'
       publicID:
         type: string
+      reasoningEffort:
+        description: ReasoningEffort 是生成该消息时生效的规范推理档位；模型无推理能力时为 null。
+        enum:
+        - none
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+        type: string
+        x-nullable: true
+        x-omitempty: false
       reasoningTokens:
         type: integer
       role:
@@ -4718,6 +5083,7 @@ definitions:
     - parentPublicID
     - platformModelName
     - publicID
+    - reasoningEffort
     - reasoningTokens
     - role
     - runID
@@ -4813,6 +5179,159 @@ definitions:
     - summary
     - title
     - updatedAt
+    type: object
+  ModelCatalogReasoningResponse:
+    properties:
+      default:
+        description: Default 为未显式选择时使用的档位。
+        enum:
+        - none
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+        type: string
+      format:
+        enum:
+        - openai
+        - anthropic_effort
+        - anthropic_budget
+        - gemini_level
+        - gemini_budget
+        - qwen
+        - toggle
+        type: string
+      levels:
+        description: Levels 为可选规范档位，按由低到高排列。
+        items:
+          enum:
+          - none
+          - minimal
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
+          type: string
+        type: array
+      source:
+        description: Source 为 inferred（由旧版思考参数推断）或 catalog（models.dev 目录）。
+        enum:
+        - inferred
+        - catalog
+        type: string
+    required:
+    - default
+    - format
+    - levels
+    - source
+    type: object
+  ModelCatalogResolveResponse:
+    properties:
+      contextWindow:
+        description: ContextWindow 为目录声明的上下文窗口（Token）；未知时为 null。
+        type: integer
+        x-nullable: true
+        x-omitempty: false
+      inputModalities:
+        description: InputModalities / OutputModalities 为目录声明的输入、输出模态（text / image
+          / pdf / audio / video）。
+        items:
+          type: string
+        type: array
+      matched:
+        description: Matched 表示 models.dev 目录中找到了对应条目；未找到时模态为空数组，请求链路按「未知」处理。
+        type: boolean
+      modelId:
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      outputModalities:
+        items:
+          type: string
+        type: array
+      provider:
+        description: Provider 与 ModelID 为命中的目录条目；未匹配时为 null。
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      reasoning:
+        allOf:
+        - $ref: '#/definitions/ModelCatalogReasoningResponse'
+        description: Reasoning 为不考虑显式 reasoning 声明时的推理能力（旧版思考参数推断或目录识别）；无能力时为 null。
+        x-nullable: true
+        x-omitempty: false
+      reasoningTemplate:
+        allOf:
+        - $ref: '#/definitions/ModelReasoningTemplateResponse'
+        description: ReasoningTemplate 为自定义推理强度的编辑模板；尚未配置路由协议且无能力时为 null。
+        x-nullable: true
+        x-omitempty: false
+    required:
+    - contextWindow
+    - inputModalities
+    - matched
+    - modelId
+    - outputModalities
+    - provider
+    - reasoning
+    - reasoningTemplate
+    type: object
+  ModelCatalogResolveResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/ModelCatalogResolveResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  ModelCatalogStatusResponse:
+    properties:
+      fetchedAt:
+        description: FetchedAt 为目录数据的拉取时间（RFC3339）；无目录时为 null。
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      lastError:
+        description: LastError 为最近一次同步失败的原因；最近一次同步成功时为 null。
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      modelCount:
+        description: ModelCount 为目录中的模型条目总数（含推理能力、模态与上下文窗口信息）。
+        type: integer
+      origin:
+        description: Origin 为当前目录数据来源：remote 为远端同步（含本地缓存恢复），builtin 为随版本发布的内置快照；无目录时为
+          null。
+        enum:
+        - remote
+        - builtin
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      refreshing:
+        description: Refreshing 表示目录正在同步（按需后台同步或手动同步）。
+        type: boolean
+    required:
+    - fetchedAt
+    - lastError
+    - modelCount
+    - origin
+    - refreshing
+    type: object
+  ModelCatalogStatusResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/ModelCatalogStatusResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
     type: object
   ModelDataResponse:
     properties:
@@ -5297,6 +5816,43 @@ definitions:
     - data
     - errorMsg
     type: object
+  ModelReasoningTemplateResponse:
+    properties:
+      budgets:
+        additionalProperties:
+          type: integer
+        description: Budgets 为各档位的建议预算（Token），仅预算类格式非 null。
+        type: object
+        x-nullable: true
+        x-omitempty: false
+      format:
+        enum:
+        - openai
+        - anthropic_effort
+        - anthropic_budget
+        - gemini_level
+        - gemini_budget
+        - qwen
+        - toggle
+        type: string
+      levels:
+        description: Levels 为该格式可声明的规范档位，按由低到高排列。
+        items:
+          enum:
+          - none
+          - minimal
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
+          type: string
+        type: array
+    required:
+    - budgets
+    - format
+    - levels
+    type: object
   ModelResponse:
     properties:
       accessScope:
@@ -5657,12 +6213,19 @@ definitions:
         items:
           $ref: '#/definitions/OpenRouterOfficialPricingItemResponse'
         type: array
+      origin:
+        description: Origin 为 remote（远端同步）或 builtin（随版本发布的内置快照，价格可能落后于官方）。
+        enum:
+        - remote
+        - builtin
+        type: string
       stale:
         type: boolean
     required:
     - cached
     - fetchedAt
     - items
+    - origin
     - stale
     type: object
   OpenRouterOfficialPricingItemResponse:
@@ -5745,6 +6308,34 @@ definitions:
     - inputCacheRead
     - inputCacheWrite
     - prompt
+    type: object
+  PasswordChangeVerificationStartResponse:
+    properties:
+      availableMethods:
+        items:
+          type: string
+        type: array
+      expiresAt:
+        type: string
+      sent:
+        type: boolean
+      verificationMethod:
+        type: string
+    required:
+    - availableMethods
+    - expiresAt
+    - sent
+    - verificationMethod
+    type: object
+  PasswordChangeVerificationStartResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/PasswordChangeVerificationStartResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
     type: object
   PasswordResetCompleteRequest:
     properties:
@@ -6485,6 +7076,121 @@ definitions:
     - data
     - errorMsg
     type: object
+  ProviderBindBridgeStartRequest:
+    properties:
+      clientID:
+        maxLength: 128
+        type: string
+      clientState:
+        maxLength: 128
+        minLength: 43
+        type: string
+      codeChallenge:
+        maxLength: 128
+        minLength: 43
+        type: string
+      next:
+        maxLength: 2048
+        type: string
+      redirectURI:
+        maxLength: 2048
+        type: string
+    required:
+    - clientID
+    - clientState
+    - codeChallenge
+    - redirectURI
+    type: object
+  PublicModelControlOptionResponse:
+    properties:
+      description:
+        type: string
+      label:
+        type: string
+      value:
+        type: string
+    required:
+    - description
+    - label
+    - value
+    type: object
+  PublicModelControlResponse:
+    properties:
+      default:
+        description: Default 为默认取值：select 为选项值，toggle 为 on/off，number 为十进制数值；为 null
+          表示不修改参数。
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      description:
+        type: string
+      icon:
+        description: Icon 为 lucide 图标名（kebab-case）；为空时由客户端按类型选择通用图标。
+        type: string
+      id:
+        type: string
+      integer:
+        type: boolean
+      kind:
+        description: Kind 为 reasoning 时是统一思考强度控件，选项为规范档位（目录来源另有 auto）。
+        enum:
+        - generic
+        - reasoning
+        type: string
+      label:
+        type: string
+      locked:
+        description: Locked 为 true 时固定使用默认值，客户端只展示不可修改。
+        type: boolean
+      max:
+        type: number
+        x-nullable: true
+        x-omitempty: false
+      min:
+        type: number
+        x-nullable: true
+        x-omitempty: false
+      options:
+        items:
+          $ref: '#/definitions/PublicModelControlOptionResponse'
+        type: array
+      placement:
+        enum:
+        - toolbar
+        - menu
+        type: string
+      protocols:
+        description: Protocols 非空时控件只在这些协议键上生效。
+        items:
+          type: string
+        type: array
+      step:
+        type: number
+        x-nullable: true
+        x-omitempty: false
+      type:
+        enum:
+        - select
+        - toggle
+        - number
+        type: string
+    required:
+    - default
+    - description
+    - icon
+    - id
+    - integer
+    - kind
+    - label
+    - locked
+    - max
+    - min
+    - options
+    - placement
+    - protocols
+    - step
+    - type
+    type: object
   PublicModelListResponseDoc:
     properties:
       data:
@@ -6572,10 +7278,71 @@ definitions:
     - outputUSDPerMTokens
     - upToTokens
     type: object
+  PublicModelReasoningResponse:
+    properties:
+      controlPath:
+        description: ControlPath 为推断来源的原生参数路径（高级参数面板需隐藏该控件）；显式声明时为 null。
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      default:
+        description: Default 为未显式选择时使用的档位。
+        enum:
+        - none
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+        type: string
+      levels:
+        description: Levels 为可选规范档位，按由低到高排列。
+        items:
+          enum:
+          - none
+          - minimal
+          - low
+          - medium
+          - high
+          - xhigh
+          - max
+          type: string
+        type: array
+      locked:
+        description: Locked 为 true 时档位被管理员锁定为 default，客户端传入的档位不生效。
+        type: boolean
+      source:
+        description: Source 为能力来源。catalog 表示由 models.dev 目录自动识别：未显式选择档位时不下发推理参数，由上游决定默认行为。
+        enum:
+        - explicit
+        - inferred
+        - catalog
+        type: string
+    required:
+    - controlPath
+    - default
+    - levels
+    - locked
+    - source
+    type: object
   PublicModelResponse:
     properties:
       capabilitiesJSON:
         type: string
+      contextWindow:
+        description: ContextWindow 为上下文窗口（Token）：能力 JSON 显式配置优先，其次 models.dev 目录；未知时为
+          null。
+        type: integer
+        x-nullable: true
+        x-omitempty: false
+      controls:
+        description: |-
+          Controls 是用户端可操作的模型控件（管理员隐藏的控件不下发），顺序即展示顺序。
+          用户请求只提交 {控件 id: 取值}，参数片段只保存在服务端。
+        items:
+          $ref: '#/definitions/PublicModelControlResponse'
+        type: array
       description:
         type: string
       displayGroupID:
@@ -6588,8 +7355,30 @@ definitions:
         type: string
       icon:
         type: string
+      inputModalities:
+        description: |-
+          InputModalities 是模型可接收的输入模态（text / image / pdf / audio / video），按规范顺序排列；
+          能力未知时为空数组。它描述模型本身的能力，实际是否原生发送还取决于接入协议与大小限制，由服务端决定。
+        items:
+          type: string
+        type: array
+      inputModalitiesSource:
+        description: InputModalitiesSource 为输入模态来源：explicit 为管理员在能力 JSON 中声明，catalog
+          为 models.dev 目录；未知时为 null。
+        enum:
+        - explicit
+        - catalog
+        type: string
+        x-nullable: true
+        x-omitempty: false
       kindsJSON:
         type: string
+      outputModalities:
+        description: OutputModalities 为 models.dev 目录声明的输出模态（text / image / audio
+          / video …），仅用于展示；未知时为空数组。
+        items:
+          type: string
+        type: array
       platformModelName:
         type: string
       pricing:
@@ -6599,6 +7388,12 @@ definitions:
         x-omitempty: false
       protocolsJSON:
         type: string
+      reasoning:
+        allOf:
+        - $ref: '#/definitions/PublicModelReasoningResponse'
+        description: Reasoning 是后端归一化的推理强度能力（显式声明或由旧版参数控件推断）；无能力时为 null。
+        x-nullable: true
+        x-omitempty: false
       sortOrder:
         type: integer
       vendor:
@@ -6609,15 +7404,21 @@ definitions:
         type: string
     required:
     - capabilitiesJSON
+    - contextWindow
+    - controls
     - description
     - displayGroupID
     - displayGroupIcon
     - displayGroupName
     - icon
+    - inputModalities
+    - inputModalitiesSource
     - kindsJSON
+    - outputModalities
     - platformModelName
     - pricing
     - protocolsJSON
+    - reasoning
     - sortOrder
     - vendor
     - vendorIcon
@@ -6731,6 +7532,19 @@ definitions:
         $ref: '#/definitions/MessageProcessTraceResponse'
       publicID:
         type: string
+      reasoningEffort:
+        description: ReasoningEffort 是生成该消息时生效的规范推理档位；模型无推理能力时为 null。
+        enum:
+        - none
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+        type: string
+        x-nullable: true
+        x-omitempty: false
       reasoningTokens:
         type: integer
       role:
@@ -6766,6 +7580,7 @@ definitions:
     - parentPublicID
     - platformModelName
     - publicID
+    - reasoningEffort
     - reasoningTokens
     - role
     - runID
@@ -7188,6 +8003,46 @@ definitions:
     - data
     - errorMsg
     type: object
+  ResetUserTwoFactorResponse:
+    properties:
+      reset:
+        type: boolean
+    required:
+    - reset
+    type: object
+  ResetUserTwoFactorResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/ResetUserTwoFactorResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  ResolveModelCatalogRequest:
+    properties:
+      capabilitiesJSON:
+        description: CapabilitiesJSON 为表单中的能力 JSON；其中的旧版思考参数会参与推理能力推断，显式 reasoning
+          声明被忽略。
+        maxLength: 10000
+        type: string
+      name:
+        description: Name 为平台模型名，为空时返回未匹配。
+        maxLength: 255
+        type: string
+      protocols:
+        description: Protocols 为模型已绑定或待绑定来源的路由协议，用于推导推理能力格式。
+        items:
+          type: string
+        maxItems: 32
+        type: array
+      vendor:
+        maxLength: 128
+        type: string
+    required:
+    - name
+    type: object
   RevokeConversationSharesRequest:
     properties:
       conversationPublicIDs:
@@ -7268,6 +8123,19 @@ definitions:
         type: string
       providerProtocol:
         type: string
+      reasoningEffort:
+        description: ReasoningEffort 是本次运行生效的规范推理档位；模型无推理能力时为 null。
+        enum:
+        - none
+        - minimal
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+        type: string
+        x-nullable: true
+        x-omitempty: false
       reasoningTokens:
         type: integer
       requestID:
@@ -7316,6 +8184,7 @@ definitions:
     - platformModelName
     - provider
     - providerProtocol
+    - reasoningEffort
     - reasoningTokens
     - requestID
     - requestedModelName
@@ -7362,6 +8231,10 @@ definitions:
         - file
         - mixed
         type: string
+      controls:
+        additionalProperties: {}
+        description: 'Controls 为模型控件选择 {控件 id: 取值}，取值为字符串、布尔或数值；未知控件与无效取值被忽略。'
+        type: object
       fileIDs:
         items:
           type: string
@@ -7379,6 +8252,7 @@ definitions:
         type: string
       options:
         additionalProperties: {}
+        description: Options 为高级参数 JSON：仅管理员生效；普通用户只保留原生工具选择（tools）。
         type: object
       parentMessagePublicID:
         maxLength: 32
@@ -7992,6 +8866,11 @@ definitions:
         type: integer
       unchangedUpstreamModels:
         type: integer
+      unresolvedProtocolModels:
+        description: UnresolvedProtocolModels 为写入目录但没有建议协议的远端模型，含义同同步计划中的同名字段。
+        items:
+          type: string
+        type: array
       updatedUpstreamModels:
         type: integer
     required:
@@ -8005,6 +8884,7 @@ definitions:
     - syncedModels
     - totalUpstream
     - unchangedUpstreamModels
+    - unresolvedProtocolModels
     - updatedUpstreamModels
     type: object
   SyncUpstreamModelsResponseDoc:
@@ -8016,66 +8896,6 @@ definitions:
     required:
     - data
     - errorMsg
-    type: object
-  SystemEventListResponseDoc:
-    properties:
-      data:
-        properties:
-          results:
-            items:
-              $ref: '#/definitions/SystemEventResponse'
-            type: array
-          total:
-            type: integer
-        required:
-        - results
-        - total
-        type: object
-      errorMsg:
-        type: string
-    required:
-    - data
-    - errorMsg
-    type: object
-  SystemEventResponse:
-    properties:
-      createdAt:
-        type: string
-      detailJSON:
-        type: string
-      event:
-        type: string
-      id:
-        type: integer
-      level:
-        type: string
-      message:
-        type: string
-      requestID:
-        type: string
-      resource:
-        type: string
-      resourceID:
-        type: string
-      source:
-        type: string
-      traceID:
-        type: string
-      updatedAt:
-        type: string
-    required:
-    - createdAt
-    - detailJSON
-    - event
-    - id
-    - level
-    - message
-    - requestID
-    - resource
-    - resourceID
-    - source
-    - traceID
-    - updatedAt
     type: object
   TemporaryChatHistoryMessage:
     properties:
@@ -8096,6 +8916,9 @@ definitions:
       clientRunID:
         maxLength: 64
         type: string
+      controls:
+        additionalProperties: {}
+        type: object
       htmlVisualPrompt:
         type: boolean
       knowledgeBaseIDs:
@@ -8227,6 +9050,153 @@ definitions:
     required:
     - data
     - errorMsg
+    type: object
+  TwoFactorCodeRequest:
+    properties:
+      code:
+        maxLength: 32
+        minLength: 6
+        type: string
+    required:
+    - code
+    type: object
+  TwoFactorDisableResponse:
+    properties:
+      disabled:
+        type: boolean
+    required:
+    - disabled
+    type: object
+  TwoFactorDisableResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/TwoFactorDisableResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  TwoFactorEmailStartRequest:
+    properties:
+      challengeToken:
+        maxLength: 4096
+        minLength: 20
+        type: string
+    required:
+    - challengeToken
+    type: object
+  TwoFactorRecoveryCodesResponse:
+    properties:
+      recoveryCodes:
+        items:
+          type: string
+        type: array
+      status:
+        $ref: '#/definitions/TwoFactorStatusResponse'
+    required:
+    - recoveryCodes
+    - status
+    type: object
+  TwoFactorRecoveryCodesResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/TwoFactorRecoveryCodesResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  TwoFactorSetupCancelResponse:
+    properties:
+      canceled:
+        type: boolean
+    required:
+    - canceled
+    type: object
+  TwoFactorSetupCancelResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/TwoFactorSetupCancelResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  TwoFactorSetupStartResponse:
+    properties:
+      expiresAt:
+        type: string
+      otpauthURL:
+        type: string
+      secret:
+        type: string
+    required:
+    - expiresAt
+    - otpauthURL
+    - secret
+    type: object
+  TwoFactorSetupStartResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/TwoFactorSetupStartResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  TwoFactorStatusResponse:
+    properties:
+      available:
+        type: boolean
+      enabledAt:
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      recoveryCount:
+        type: integer
+      required:
+        type: boolean
+      totpEnabled:
+        type: boolean
+    required:
+    - available
+    - enabledAt
+    - recoveryCount
+    - required
+    - totpEnabled
+    type: object
+  TwoFactorStatusResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/TwoFactorStatusResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  TwoFactorVerifyRequest:
+    properties:
+      challengeToken:
+        maxLength: 4096
+        minLength: 20
+        type: string
+      code:
+        maxLength: 32
+        minLength: 6
+        type: string
+      verificationMethod:
+        enum:
+        - two_factor
+        - email
+        type: string
+    required:
+    - challengeToken
+    - code
     type: object
   UIComponentDataResponse:
     properties:
@@ -9173,6 +10143,13 @@ definitions:
         items:
           type: string
         type: array
+      unresolvedProtocolModels:
+        description: |-
+          UnresolvedProtocolModels 为同步后没有建议协议的远端模型：模型类型推断不出协议，需要为上游设置对应默认协议，
+          或绑定时手动选择。它们仍会写入目录，与上面的分类不互斥。
+        items:
+          type: string
+        type: array
       updatedModels:
         items:
           type: string
@@ -9183,6 +10160,7 @@ definitions:
     - protectedModels
     - reactivatedModels
     - unchangedModels
+    - unresolvedProtocolModels
     - updatedModels
     type: object
   UpstreamRemoteModelResponse:
@@ -10053,6 +11031,81 @@ definitions:
     required:
     - errorMsg
     type: object
+  UserIdentityListResponse:
+    properties:
+      results:
+        items:
+          $ref: '#/definitions/UserIdentityResponse'
+        type: array
+    required:
+    - results
+    type: object
+  UserIdentityListResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/UserIdentityListResponse'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
+  UserIdentityResponse:
+    properties:
+      email:
+        type: string
+      emailVerified:
+        type: boolean
+      id:
+        type: integer
+      lastLoginAt:
+        type: string
+        x-nullable: true
+        x-omitempty: false
+      linkedAt:
+        type: string
+      providerDisplayName:
+        type: string
+      providerID:
+        type: integer
+      providerLogoURL:
+        type: string
+      providerName:
+        type: string
+      providerSlug:
+        type: string
+      providerType:
+        type: string
+    required:
+    - email
+    - emailVerified
+    - id
+    - lastLoginAt
+    - linkedAt
+    - providerDisplayName
+    - providerID
+    - providerLogoURL
+    - providerName
+    - providerSlug
+    - providerType
+    type: object
+  UserIdentityResponseData:
+    properties:
+      identity:
+        $ref: '#/definitions/UserIdentityResponse'
+    required:
+    - identity
+    type: object
+  UserIdentityResponseDoc:
+    properties:
+      data:
+        $ref: '#/definitions/UserIdentityResponseData'
+      errorMsg:
+        type: string
+    required:
+    - data
+    - errorMsg
+    type: object
   UserListResponseDoc:
     properties:
       data:
@@ -10247,7 +11300,7 @@ info:
   contact: {}
   description: DEEIX Chat 后端 API 文档
   title: DEEIX Chat API
-  version: "0.4.2-1"
+  version: "0.4.3-1"
 paths:
   /admin/announcements:
     get:
@@ -10271,11 +11324,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -10407,11 +11460,11 @@ paths:
       - application/json
       description: 管理员分页查看全量可追溯审计日志
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -10705,11 +11758,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -10764,9 +11817,9 @@ paths:
     get:
       consumes:
       - application/json
-      description: 从 storage 缓存读取 OpenRouter 模型标识、基础定价、输入 token 阶梯覆盖和上下文限制；无法映射到当前
-        token 计费模型的附加字段会在 unsupportedFields 中标记，快速配置会忽略这些字段并继续导入可识别的 token 价格。由原生工具计费负责的按次字段（例如
-        web_search）会被忽略。
+      description: 从 storage 缓存读取 OpenRouter 模型标识（缓存缺失或远端不可达时使用随版本发布的内置快照，origin 为
+        builtin）、基础定价、输入 token 阶梯覆盖和上下文限制；无法映射到当前 token 计费模型的附加字段会在 unsupportedFields
+        中标记，快速配置会忽略这些字段并继续导入可识别的 token 价格。由原生工具计费负责的按次字段（例如 web_search）会被忽略。
       parameters:
       - description: 强制刷新缓存
         in: query
@@ -10855,11 +11908,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11050,11 +12103,11 @@ paths:
       - application/json
       description: 管理员分页查看全量模型调用与计费用量账本
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11108,6 +12161,7 @@ paths:
       - admin
   /admin/content-moderation/config:
     get:
+      description: 返回当前内容审核配置与可选审核类别目录
       produces:
       - application/json
       responses:
@@ -11115,16 +12169,25 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationConfigResponseDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Get content moderation config
+      summary: 查询内容审核配置
       tags:
       - admin-content-moderation
     put:
       consumes:
       - application/json
+      description: 保存内容审核服务、策略与队列配置；启用时必须提供审核服务配置与策略
       parameters:
-      - description: Content moderation configuration
+      - description: 内容审核配置
         in: body
         name: body
         required: true
@@ -11137,55 +12200,68 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationConfigUpdateResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Update content moderation config
+      summary: 更新内容审核配置
       tags:
       - admin-content-moderation
   /admin/content-moderation/events:
     get:
+      description: 按结果、方向、模态、类别、用户、运行与时间范围筛选审核事件，按事件 ID 倒序返回
       parameters:
-      - description: Page number
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: Page size
+      - description: 每页数量（1-1000，默认 20）
         in: query
-        name: pageSize
+        name: page_size
         type: integer
-      - description: Exact event, user, run, model, result, or summary search
+      - description: 按事件、用户、运行、模型、结果或摘要精确搜索
         in: query
         name: query
         type: string
-      - description: Result filter
+      - description: 审核结果筛选（hit/failed_open/passed）
         in: query
         name: result
         type: string
-      - description: Direction filter
+      - description: 方向筛选（input/output）
         in: query
         name: direction
         type: string
-      - description: Modality filter
+      - description: 模态筛选（text/image）
         in: query
         name: modality
         type: string
-      - description: Category filter
+      - description: 类别筛选
         in: query
         name: category
         type: string
-      - description: User ID
+      - description: 用户 ID
         in: query
-        name: userId
+        name: user_id
         type: integer
-      - description: Run ID
+      - description: 运行 ID
         in: query
-        name: runId
+        name: run_id
         type: string
-      - description: Start time (RFC3339)
+      - description: 起始时间（RFC3339）
         in: query
         name: from
         type: string
-      - description: End time (RFC3339)
+      - description: 结束时间（RFC3339）
         in: query
         name: to
         type: string
@@ -11196,15 +12272,28 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationEventListResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: List content moderation events
+      summary: 分页查询内容审核事件
       tags:
       - admin-content-moderation
   /admin/content-moderation/events/{eventID}:
     get:
+      description: 返回单个审核事件；文本仍在保留期内时一并返回解密后的文本，并记录审计日志
       parameters:
-      - description: Moderation event ID
+      - description: 审核事件 ID
         in: path
         name: eventID
         required: true
@@ -11216,20 +12305,33 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationEventDetailResponseDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Get content moderation event detail
+      summary: 查询内容审核事件详情
       tags:
       - admin-content-moderation
   /admin/content-moderation/events/{eventID}/images/{index}:
     get:
+      description: 返回审核事件中按序号指定的隔离图片原始内容，并记录审计日志
       parameters:
-      - description: Moderation event ID
+      - description: 审核事件 ID
         in: path
         name: eventID
         required: true
         type: string
-      - description: Image index
+      - description: 图片序号（从 0 开始）
         in: path
         name: index
         required: true
@@ -11241,13 +12343,30 @@ paths:
           description: OK
           schema:
             type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Stream a isolated moderation image
+      summary: 读取审核事件的隔离图片
       tags:
       - admin-content-moderation
   /admin/content-moderation/probe:
     post:
+      description: 使用当前配置向审核服务发送探测请求，验证连通性以及文本与图片审核能力
       produces:
       - application/json
       responses:
@@ -11255,19 +12374,32 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationProbeResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Probe content moderation service
+      summary: 探测内容审核服务
       tags:
       - admin-content-moderation
   /admin/content-moderation/stats:
     get:
+      description: 按天汇总指定时间范围内的内容审核结果
       parameters:
-      - description: Start time (RFC3339)
+      - description: 起始时间（RFC3339）
         in: query
         name: from
         type: string
-      - description: End time (RFC3339)
+      - description: 结束时间（RFC3339）
         in: query
         name: to
         type: string
@@ -11278,9 +12410,21 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/ContentModerationStatsResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ContentmoderationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Get content moderation daily stats
+      summary: 查询内容审核每日统计
       tags:
       - admin-content-moderation
   /admin/conversation-events:
@@ -11289,11 +12433,11 @@ paths:
       - application/json
       description: 管理员分页查看对话运行轨迹、工具、MCP 与处理事件
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11388,38 +12532,6 @@ paths:
       summary: 管理员查询对话事件详情
       tags:
       - admin
-  /admin/conversation-events/cleanup:
-    post:
-      consumes:
-      - application/json
-      description: 物理删除指定运行的全部对话事件；保留消息、附件、调用与计费记录
-      parameters:
-      - description: 运行轨迹清理参数
-        in: body
-        name: body
-        required: true
-        schema:
-          $ref: '#/definitions/CleanupConversationRunsRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/CleanupConversationRunsResponseDoc'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/AdminErrorDoc'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/AdminErrorDoc'
-      security:
-      - BearerAuth: []
-      summary: 管理员按运行清理对话事件
-      tags:
-      - admin
   /admin/conversations/export:
     get:
       description: 流式导出全量会话及消息为 NDJSON 文件，最后一行为 export_manifest 元数据
@@ -11461,11 +12573,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11572,11 +12684,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11610,11 +12722,11 @@ paths:
         name: id
         required: true
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11798,11 +12910,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -11966,11 +13078,11 @@ paths:
     get:
       description: 分页查询仍在图标库中的已上传图标，按上传时间倒序返回
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -12053,15 +13165,77 @@ paths:
       summary: 管理员从图标库移除已上传图标
       tags:
       - llm
+  /admin/llm/model-catalog:
+    get:
+      description: 返回目录数据来源（远端同步或内置快照）、拉取时间、条目数、是否正在同步与最近一次同步错误；目录过期时在后台发起一次同步
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ModelCatalogStatusResponseDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询 models.dev 模型目录状态
+      tags:
+      - llm
+  /admin/llm/model-catalog/refresh:
+    post:
+      description: 拉取最新目录并替换当前目录；失败时保留当前目录并记录错误
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ModelCatalogStatusResponseDoc'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/ChannelErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员立即同步 models.dev 模型目录
+      tags:
+      - llm
+  /admin/llm/model-catalog/resolve:
+    post:
+      consumes:
+      - application/json
+      description: 按表单中的平台模型名、技术厂商、路由协议与能力 JSON，返回 models.dev 目录中的输入/输出模态与上下文窗口、自动识别的推理强度，以及自定义推理强度的编辑模板；目录过期时在后台发起一次同步
+      parameters:
+      - description: 表单当前值
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ResolveModelCatalogRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ModelCatalogResolveResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ChannelErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员查询模型编辑表单的自动识别结果
+      tags:
+      - llm
   /admin/llm/model-display-groups:
     get:
       description: 分页查询自定义展示分组；未绑定分组的模型继续按技术厂商展示
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -12188,11 +13362,11 @@ paths:
     get:
       description: 分页查询模型技术厂商目录；技术厂商是路由、权限和计费使用的稳定身份
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -12322,11 +13496,11 @@ paths:
       - application/json
       description: 管理员分页查询平台模型目录，可按 only_active 过滤
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -12544,11 +13718,11 @@ paths:
         name: id
         required: true
         type: integer
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -12912,11 +14086,11 @@ paths:
       - application/json
       description: 管理员分页查询 LLM 上游配置
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -13147,11 +14321,11 @@ paths:
         name: id
         required: true
         type: integer
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -14080,11 +15254,11 @@ paths:
       - application/json
       description: 管理员分页查看订阅和充值支付单
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -14442,11 +15616,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -14583,11 +15757,11 @@ paths:
       - application/json
       description: 管理员分页查看兑换码兑换明细，含奖励内容与余额变动，已删除兑换码的历史仍可查询
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -14913,11 +16087,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -15048,68 +16222,6 @@ paths:
       summary: 管理员更新内置技能
       tags:
       - admin-skills
-  /admin/system-events:
-    get:
-      consumes:
-      - application/json
-      description: 管理员分页查看后台结构化系统事件
-      parameters:
-      - description: 页码
-        in: query
-        name: page
-        type: integer
-      - description: 每页数量
-        in: query
-        name: page_size
-        type: integer
-      - description: 搜索关键词
-        in: query
-        name: query
-        type: string
-      - description: 级别
-        in: query
-        name: level
-        type: string
-      - description: 来源
-        in: query
-        name: source
-        type: string
-      - description: 事件
-        in: query
-        name: event
-        type: string
-      - description: 创建时间起点(RFC3339)
-        in: query
-        name: created_from
-        type: string
-      - description: 创建时间终点(RFC3339)
-        in: query
-        name: created_to
-        type: string
-      - description: 排序方式
-        in: query
-        name: sort
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/SystemEventListResponseDoc'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/AdminErrorDoc'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/AdminErrorDoc'
-      security:
-      - BearerAuth: []
-      summary: 管理员查询系统事件
-      tags:
-      - admin
   /admin/ui-components:
     get:
       consumes:
@@ -15127,11 +16239,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -15352,11 +16464,11 @@ paths:
         in: query
         name: result
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -15386,11 +16498,11 @@ paths:
       - application/json
       description: 管理员分页查看所有用户，实现账户隔离管理
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -15538,6 +16650,47 @@ paths:
       security:
       - BearerAuth: []
       summary: 管理员更新用户可编辑字段
+      tags:
+      - admin
+  /admin/users/{id}/reset-2fa:
+    post:
+      description: 管理员清除指定用户的 TOTP 与恢复码并吊销其全部会话；不允许重置超级管理员
+      parameters:
+      - description: 用户ID
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ResetUserTwoFactorResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AdminErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/AdminErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AdminErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/AdminErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AdminErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 管理员重置用户双因素认证
       tags:
       - admin
   /admin/users/{id}/reset-password:
@@ -15809,6 +16962,110 @@ paths:
       summary: 今日不再显示公告
       tags:
       - announcements
+  /auth/2fa/email/start:
+    post:
+      consumes:
+      - application/json
+      description: 为待完成的双因素登录挑战向用户已验证邮箱发送验证码
+      operationId: twoFactorEmailStartCreate
+      parameters:
+      - description: 登录挑战令牌
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/TwoFactorEmailStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/EmailVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      summary: 发送登录双因素邮箱验证码
+      tags:
+      - auth
+  /auth/2fa/verify:
+    post:
+      consumes:
+      - application/json
+      description: 使用登录挑战令牌与 TOTP、恢复码或邮箱验证码完成双因素登录，成功后返回会话
+      operationId: twoFactorVerifyCreate
+      parameters:
+      - description: 双因素校验参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/TwoFactorVerifyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/LoginResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "423":
+          description: Locked
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      summary: 校验登录双因素验证码
+      tags:
+      - auth
+  /auth/local/exchange:
+    post:
+      consumes:
+      - application/json
+      description: 仅在服务器以本地 sidecar 模式运行时可用；一次性授权凭证由启动握手交给桌面壳，只能使用一次
+      parameters:
+      - description: 本地登录一次性授权凭证
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/LocalGrantExchangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/LoginResponseDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      summary: 本地模式：用一次性授权凭证换取会话
+      tags:
+      - auth
   /auth/login:
     post:
       consumes:
@@ -15857,6 +17114,10 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/LoginOptionsResponseDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
         "500":
           description: Internal Server Error
           schema:
@@ -15912,6 +17173,77 @@ paths:
       security:
       - BearerAuth: []
       summary: 登出全部会话
+      tags:
+      - auth
+  /auth/password/change/complete:
+    post:
+      consumes:
+      - application/json
+      description: 校验当前密码及安全验证码后修改密码；成功后吊销该用户全部会话并清除刷新令牌 Cookie
+      parameters:
+      - description: 修改密码参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ChangePasswordRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ChangePasswordResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 修改当前用户密码
+      tags:
+      - auth
+  /auth/password/change/start:
+    post:
+      consumes:
+      - application/json
+      description: 为当前用户发起修改密码前的安全验证；请求体可省略，未指定验证方式时由服务端选择可用方式
+      parameters:
+      - description: 安全验证方式
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/SecurityVerificationStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/PasswordChangeVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 发起修改密码安全验证
       tags:
       - auth
   /auth/password/reset/complete:
@@ -16002,21 +17334,72 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
       summary: 创建第三方登录授权桥事务
       tags:
       - auth
-  /auth/providers/{slug}/exchange:
-    post:
-      consumes:
-      - application/json
-      description: 使用客户端 PKCE verifier 原子兑换服务端回调签发的一次性授权码，并进入统一 2FA/会话流程
+  /auth/providers/{slug}/callback:
+    get:
+      description: 外部身份源完成授权后回调当前实例；校验 state 并签发一次性授权凭证后以 302 重定向回客户端 redirect_uri
       parameters:
       - description: 身份源 slug
         in: path
         name: slug
         required: true
         type: string
-      - description: 授权码兑换参数
+      - description: 授权码
+        in: query
+        name: code
+        type: string
+      - description: 授权事务 state
+        in: query
+        name: state
+        type: string
+      - description: 身份源返回的错误码
+        in: query
+        name: error
+        type: string
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: 重定向到客户端 redirect_uri
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "423":
+          description: Locked
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      summary: 第三方身份源授权回调
+      tags:
+      - auth
+  /auth/providers/{slug}/exchange:
+    post:
+      consumes:
+      - application/json
+      description: 使用客户端 PKCE verifier 原子兑换服务端回调签发的一次性授权凭证，并进入统一 2FA/会话流程
+      parameters:
+      - description: 身份源 slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: 一次性授权凭证兑换参数
         in: body
         name: body
         required: true
@@ -16041,7 +17424,11 @@ paths:
           description: Locked
           schema:
             $ref: '#/definitions/AuthErrorDoc'
-      summary: 兑换第三方登录一次性授权码
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      summary: 兑换第三方登录一次性授权凭证
       tags:
       - auth
   /auth/refresh:
@@ -16092,6 +17479,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
       summary: 完成邮箱注册
       tags:
       - auth
@@ -16116,6 +17507,10 @@ paths:
             $ref: '#/definitions/EmailRegistrationStartResponseDoc'
         "400":
           description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "429":
+          description: Too Many Requests
           schema:
             $ref: '#/definitions/AuthErrorDoc'
       summary: 发送邮箱注册验证码
@@ -16404,11 +17799,11 @@ paths:
       - application/json
       description: 查询当前用户的每日用量与费用
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -16516,6 +17911,19 @@ paths:
       summary: 查询品牌 Web App Manifest
       tags:
       - settings
+  /capabilities:
+    get:
+      description: 返回这台服务器提供哪些功能。客户端据此决定显示什么；能力关闭的功能其端点返回 404 feature.disabled。
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/CapabilitiesResponseDoc'
+      summary: 查询服务器能力声明
+      tags:
+      - system
   /context-artifacts/{id}:
     get:
       consumes:
@@ -16862,8 +18270,7 @@ paths:
       - chat
   /conversation-runs/stream:
     get:
-      description: Sends an authoritative snapshot followed by live user-scoped run
-        state events; the snapshot is re-sent periodically for client-side reconciliation
+      description: 先推送当前用户进行中运行的权威快照，再持续推送该用户范围内的运行状态事件；快照会定期重发，供客户端对账
       produces:
       - text/event-stream
       responses:
@@ -16877,7 +18284,7 @@ paths:
             $ref: '#/definitions/ConversationErrorDoc'
       security:
       - BearerAuth: []
-      summary: Stream active conversation generations
+      summary: 订阅进行中的会话生成
       tags:
       - chat
   /conversations:
@@ -16886,11 +18293,11 @@ paths:
       - application/json
       description: 查询当前用户会话列表
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -17151,19 +18558,150 @@ paths:
       summary: 更新会话标签
       tags:
       - chat
-  /conversations/{id}/media/videos/extensions/stream:
+  /conversations/{id}/media/images/edits/stream:
     post:
       consumes:
       - application/json
+      description: 在会话中基于参考图片（可附遮罩）按提示词编辑图片，并以 NDJSON 流式返回任务状态事件
       parameters:
-      - description: 会话 Public ID
+      - description: 会话 public_id
         in: path
         name: id
         required: true
         type: string
-      - description: 视频扩展请求
+      - description: 媒体任务参数
         in: body
-        name: payload
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/MediaImageRequest'
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: NDJSON stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 编辑会话图片
+      tags:
+      - chat
+  /conversations/{id}/media/images/generations/stream:
+    post:
+      consumes:
+      - application/json
+      description: 在会话中按提示词生成图片，并以 NDJSON 流式返回任务状态事件
+      parameters:
+      - description: 会话 public_id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 媒体任务参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/MediaImageRequest'
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: NDJSON stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 生成会话图片
+      tags:
+      - chat
+  /conversations/{id}/media/videos/extensions/stream:
+    post:
+      consumes:
+      - application/json
+      description: 在会话中基于来源视频按提示词扩展视频，并以 NDJSON 流式返回任务状态事件
+      parameters:
+      - description: 会话 public_id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 视频扩展参数
+        in: body
+        name: body
         required: true
         schema:
           $ref: '#/definitions/MediaVideoExtensionRequest'
@@ -17177,18 +18715,109 @@ paths:
         "400":
           description: Bad Request
           schema:
-            $ref: '#/definitions/Envelope'
+            $ref: '#/definitions/ConversationErrorDoc'
         "401":
           description: Unauthorized
           schema:
-            $ref: '#/definitions/Envelope'
+            $ref: '#/definitions/ConversationErrorDoc'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
         "404":
           description: Not Found
           schema:
-            $ref: '#/definitions/Envelope'
+            $ref: '#/definitions/ConversationErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
       summary: 扩展会话视频
       tags:
-      - Conversations
+      - chat
+  /conversations/{id}/media/videos/generations/stream:
+    post:
+      consumes:
+      - application/json
+      description: 在会话中按提示词生成视频，并以 NDJSON 流式返回任务状态事件
+      parameters:
+      - description: 会话 public_id
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: 媒体任务参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/MediaVideoRequest'
+      produces:
+      - application/x-ndjson
+      responses:
+        "200":
+          description: NDJSON stream
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "402":
+          description: Payment Required
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 生成会话视频
+      tags:
+      - chat
   /conversations/{id}/messages:
     get:
       consumes:
@@ -17200,11 +18829,11 @@ paths:
         name: id
         required: true
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -17492,11 +19121,11 @@ paths:
         name: id
         required: true
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -17871,11 +19500,11 @@ paths:
       - application/json
       description: 分页搜索当前用户的会话标题、元数据、项目和消息正文，并返回是否还有下一页
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -17945,11 +19574,11 @@ paths:
       - application/json
       description: 查询当前用户上传的文件
       parameters:
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -18131,6 +19760,84 @@ paths:
       summary: 获取文件内容
       tags:
       - chat
+  /files/{file_id}/extract:
+    get:
+      description: 返回当前用户文件已完成提取的文本内容；提取尚未就绪时返回 409
+      parameters:
+      - description: 文件ID
+        in: path
+        name: file_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/FileExtractResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 获取文件提取文本
+      tags:
+      - chat
+  /files/{file_id}/processing:
+    get:
+      description: 查询当前用户单个文件的文本提取与向量化处理状态
+      parameters:
+      - description: 文件ID
+        in: path
+        name: file_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/FileProcessingStatusResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 查询文件处理状态
+      tags:
+      - chat
   /files/embeddings:
     post:
       consumes:
@@ -18219,11 +19926,11 @@ paths:
           type: string
         name: id
         type: array
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -18263,11 +19970,11 @@ paths:
         name: id
         required: true
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -18419,11 +20126,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -18513,11 +20220,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -18733,6 +20440,213 @@ paths:
       summary: 更新当前用户资料
       tags:
       - auth
+  /me/2fa:
+    get:
+      description: 返回 TOTP 是否可用、是否已启用、是否强制及剩余恢复码数量
+      operationId: twoFactorStatusList
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorStatusResponseDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 获取当前用户双因素认证状态
+      tags:
+      - auth
+  /me/2fa/disable:
+    post:
+      consumes:
+      - application/json
+      description: 校验 TOTP 验证码或恢复码后关闭当前用户的双因素认证
+      operationId: twoFactorDisableCreate
+      parameters:
+      - description: TOTP 验证码或恢复码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/TwoFactorCodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorDisableResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 关闭双因素认证
+      tags:
+      - auth
+  /me/2fa/recovery/regenerate:
+    post:
+      consumes:
+      - application/json
+      description: 校验 TOTP 验证码或恢复码（恢复码校验通过即被消耗）后作废旧恢复码，并返回新的一次性恢复码
+      operationId: twoFactorRecoveryRegenerateCreate
+      parameters:
+      - description: TOTP 验证码或恢复码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/TwoFactorCodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorRecoveryCodesResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 重新生成双因素恢复码
+      tags:
+      - auth
+  /me/2fa/setup:
+    delete:
+      description: 丢弃当前用户尚未确认的 TOTP 设置
+      operationId: twoFactorSetupDelete
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorSetupCancelResponseDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 取消双因素认证设置
+      tags:
+      - auth
+  /me/2fa/setup/confirm:
+    post:
+      consumes:
+      - application/json
+      description: 使用 TOTP 验证码确认设置并启用双因素认证，返回一次性恢复码
+      operationId: twoFactorSetupConfirmCreate
+      parameters:
+      - description: TOTP 验证码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/TwoFactorCodeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorRecoveryCodesResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 确认启用双因素认证
+      tags:
+      - auth
+  /me/2fa/setup/start:
+    post:
+      description: 为当前用户生成新的 TOTP 密钥与 otpauth URL，需在过期前确认
+      operationId: twoFactorSetupStartCreate
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/TwoFactorSetupStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 开始设置双因素认证
+      tags:
+      - auth
   /me/delete/start:
     post:
       consumes:
@@ -18766,6 +20680,394 @@ paths:
       security:
       - BearerAuth: []
       summary: 开始删除账号验证
+      tags:
+      - auth
+  /me/email/bootstrap/complete:
+    post:
+      consumes:
+      - application/json
+      description: 使用邮箱与验证码为当前用户绑定初始邮箱，返回更新后的用户信息
+      parameters:
+      - description: 邮箱与验证码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/EmailBootstrapCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/MeResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 完成初始邮箱绑定
+      tags:
+      - auth
+  /me/email/bootstrap/start:
+    post:
+      consumes:
+      - application/json
+      description: 为尚未绑定邮箱的当前用户向指定邮箱发送验证码
+      parameters:
+      - description: 待绑定邮箱
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/EmailVerificationStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/EmailVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 发送初始邮箱验证码
+      tags:
+      - auth
+  /me/email/change/complete:
+    post:
+      consumes:
+      - application/json
+      description: 校验当前身份验证码与新邮箱验证码后更换邮箱，返回更新后的用户信息
+      parameters:
+      - description: 邮箱更换参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/EmailChangeCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/MeResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 完成邮箱更换
+      tags:
+      - auth
+  /me/email/change/start-current:
+    post:
+      consumes:
+      - application/json
+      description: 更换邮箱前先按指定方式验证当前身份；请求体可省略，未指定验证方式时由服务端选择可用方式
+      parameters:
+      - description: 安全验证方式
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/SecurityVerificationStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/EmailVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 发起更换邮箱的当前身份验证
+      tags:
+      - auth
+  /me/email/change/start-new:
+    post:
+      consumes:
+      - application/json
+      description: 更换邮箱时向新邮箱发送验证码
+      parameters:
+      - description: 新邮箱
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/EmailVerificationStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/EmailVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 发送新邮箱验证码
+      tags:
+      - auth
+  /me/email/verify-current/complete:
+    post:
+      consumes:
+      - application/json
+      description: 使用验证码验证当前用户已绑定的邮箱，返回更新后的用户信息
+      parameters:
+      - description: 邮箱验证码
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/EmailVerificationCompleteRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/MeResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 完成当前邮箱验证
+      tags:
+      - auth
+  /me/email/verify-current/start:
+    post:
+      description: 向当前用户已绑定但未验证的邮箱发送验证码
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/EmailVerificationStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 发送当前邮箱验证码
+      tags:
+      - auth
+  /me/identities:
+    get:
+      description: 列出当前用户已关联的 OIDC/OAuth2 第三方身份
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/UserIdentityListResponseDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 获取当前用户已绑定的第三方身份
+      tags:
+      - auth
+  /me/identities/{identity_id}:
+    delete:
+      description: 解除当前用户与指定第三方身份的关联；不允许移除最后一种登录方式
+      parameters:
+      - description: 身份ID
+        in: path
+        name: identity_id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/DeleteUserIdentityResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 解绑当前用户的第三方身份
+      tags:
+      - auth
+  /me/identities/providers/{slug}/authorize:
+    post:
+      consumes:
+      - application/json
+      description: 为当前登录用户创建 PKCE 保护的绑定事务；外部身份源仅回调当前 DEEIX 实例，绑定在兑换时才生效
+      parameters:
+      - description: 身份源 slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: 授权桥参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ProviderBindBridgeStartRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ProviderAuthBridgeStartResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 创建第三方身份绑定授权桥事务
+      tags:
+      - auth
+  /me/identities/providers/{slug}/exchange:
+    post:
+      consumes:
+      - application/json
+      description: 使用客户端 PKCE verifier 兑换绑定用的一次性授权凭证，将身份绑到当前登录用户
+      parameters:
+      - description: 身份源 slug
+        in: path
+        name: slug
+        required: true
+        type: string
+      - description: 一次性授权凭证兑换参数
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/ProviderAuthBridgeExchangeRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/UserIdentityResponseDoc'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/AuthErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 兑换第三方身份绑定一次性授权凭证
       tags:
       - auth
   /me/onboarding/complete:
@@ -18924,7 +21226,7 @@ paths:
     patch:
       consumes:
       - application/json
-      description: 更新当前用户会话中的 assistant 消息内容，并标记为已编辑
+      description: 就地更新当前用户会话中的 user 或 assistant 消息内容并标记为已编辑，不触发重新生成
       parameters:
       - description: 消息 public_id
         in: path
@@ -19033,11 +21335,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19071,11 +21373,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19206,6 +21508,29 @@ paths:
       summary: 更新我的自定义提示词
       tags:
       - prompt-presets
+  /runtime/chat-file-policy:
+    get:
+      description: 返回当前用户在聊天中上传与使用文件的运行时策略（大小、数量、类型与处理模式等）
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/ChatFilePolicyResponseDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/ConversationErrorDoc'
+      security:
+      - BearerAuth: []
+      summary: 获取聊天文件策略
+      tags:
+      - chat
   /settings/chat-context-policy:
     get:
       produces:
@@ -19222,13 +21547,14 @@ paths:
       - settings
   /settings/feature-policy:
     get:
+      description: 返回管理员配置的用户侧功能开关，包括知识库、处理轨迹与网页端「下载桌面端」入口
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/Envelope'
+            $ref: '#/definitions/FeaturePolicyResponseDoc'
       security:
       - BearerAuth: []
       summary: 查询用户侧功能开关策略
@@ -19399,11 +21725,11 @@ paths:
           type: integer
         name: id
         type: array
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19475,11 +21801,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19653,11 +21979,11 @@ paths:
         in: query
         name: q
         type: string
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19690,11 +22016,11 @@ paths:
         in: query
         name: enabled
         type: boolean
-      - description: 页码
+      - description: 页码（从 1 开始，默认 1）
         in: query
         name: page
         type: integer
-      - description: 每页数量
+      - description: 每页数量（1-1000，默认 20）
         in: query
         name: page_size
         type: integer
@@ -19903,6 +22229,42 @@ paths:
       security:
       - BearerAuth: []
       summary: 查询每日活跃度
+      tags:
+      - user
+  /users/{public_id}/avatar:
+    get:
+      description: 公开读取用户当前上传的头像图片。头像须为已上传的图片文件，实际类型受上传 MIME 白名单约束（默认 PNG/JPEG/WebP/GIF，SVG
+        等活动内容始终拒绝）；未上传头像时返回 404，错误响应为 JSON
+      parameters:
+      - description: 用户 public_id
+        in: path
+        name: public_id
+        required: true
+        type: string
+      produces:
+      - image/png
+      - image/jpeg
+      - image/webp
+      - image/gif
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/UserErrorDoc'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/UserErrorDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/UserErrorDoc'
+      summary: 获取用户头像
       tags:
       - user
 securityDefinitions:

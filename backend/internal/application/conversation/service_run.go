@@ -56,6 +56,24 @@ func (r *messageSendRunState) applyRoute(route *channel.ResolvedRoute) {
 	r.run.UpstreamModelName = route.UpstreamModel
 }
 
+// applyReasoningEffort 记录当前路由生效的推理档位；故障转移后以新路由的档位覆盖。
+// assistant 消息只在内存中标注，随完成态一并持久化。
+func (r *messageSendRunState) applyReasoningEffort(level string) {
+	effort := optionalReasoningEffort(level)
+	r.run.ReasoningEffort = effort
+	if assistantMessage := r.currentAssistantMessage(); assistantMessage != nil {
+		assistantMessage.ReasoningEffort = effort
+	}
+}
+
+// optionalReasoningEffort 把空档位（模型无推理能力）表示为 nil，对外序列化为 null。
+func optionalReasoningEffort(level string) *string {
+	if level == "" {
+		return nil
+	}
+	return &level
+}
+
 func newMessageSendRunState(
 	service *Service,
 	input SendMessageInput,
@@ -162,7 +180,7 @@ func (r *messageSendRunState) finalizeRun(retErr error) {
 		r.run.ErrorCode = classifyRunErrorCode(retErr)
 		r.run.ErrorMessage = textutil.TruncateTrimmed(messageErrorSummary(retErr), 255)
 	}
-	// Preserve barrier pass/fail-open state written mid-flight (do not default to not_required).
+	// 保留运行中途写入的屏障通过/fail-open 状态（不要默认设为 not_required）。
 	if result := r.currentResult(); result != nil {
 		applyModerationRunState(r.run, result)
 	}
@@ -177,7 +195,7 @@ func (r *messageSendRunState) finalizeUserMessage(ctx context.Context, retErr er
 		return
 	}
 	if result := r.currentResult(); result != nil && result.IsModerationBlocked() {
-		// Block path already wrote message moderation state; do not overwrite.
+		// 拦截路径已写入消息审核状态；不要覆盖。
 		return
 	}
 	messageStatus := "success"
@@ -212,7 +230,7 @@ func (r *messageSendRunState) finalizeAssistantMessage(ctx context.Context, retE
 		return
 	}
 	if result := r.currentResult(); result != nil && result.IsModerationBlocked() {
-		// Block path already wrote assistant moderation state; do not overwrite.
+		// 拦截路径已写入助手审核状态；不要覆盖。
 		return
 	}
 	assistantMessage := r.currentAssistantMessage()

@@ -12,6 +12,7 @@ import (
 
 	appconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/application/conversation"
 	model "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
+	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/background"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/shared/response"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/transport/http/middleware"
@@ -49,6 +50,44 @@ func sanitizeMessageOptions(options map[string]any) map[string]any {
 	return sanitized
 }
 
+const (
+	maxMessageControls        = 64
+	maxMessageControlKeyRunes = 64
+	maxMessageControlValue    = 128
+)
+
+// sanitizeMessageControls 只保留形如 {id: 字符串/布尔/数值} 的控件选择，并限制数量与长度；
+// 取值是否有效由应用层按模型控件校验。
+func sanitizeMessageControls(controls map[string]any) map[string]any {
+	if len(controls) == 0 {
+		return nil
+	}
+	sanitized := make(map[string]any, len(controls))
+	for key, value := range controls {
+		key = strings.TrimSpace(key)
+		if key == "" || len([]rune(key)) > maxMessageControlKeyRunes || len(sanitized) >= maxMessageControls {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if len(typed) <= maxMessageControlValue {
+				sanitized[key] = typed
+			}
+		case bool, float64:
+			sanitized[key] = typed
+		}
+	}
+	if len(sanitized) == 0 {
+		return nil
+	}
+	return sanitized
+}
+
+// requestAllowsRawOptions 判断请求者能否提交高级参数 JSON（仅管理员）。
+func requestAllowsRawOptions(c *gin.Context) bool {
+	return domainuser.IsAdminRole(middleware.MustUserRole(c))
+}
+
 // parseSendMessageInput 解析消息发送请求的公共参数。
 func (h *Handler) parseSendMessageInput(c *gin.Context) (appconversation.SendMessageInput, *model.Conversation, *SendMessageRequest, error) {
 	userID := middleware.MustUserID(c)
@@ -65,6 +104,7 @@ func (h *Handler) parseSendMessageInput(c *gin.Context) (appconversation.SendMes
 	}
 	req.ClientRunID = appconversation.EnsureMessageGenerationRunID(req.ClientRunID)
 	req.Options = sanitizeMessageOptions(req.Options)
+	req.Controls = sanitizeMessageControls(req.Controls)
 	// 流式接口写入响应头前先拦截明显超限请求，避免后续只能用 NDJSON error 表达 400。
 	if err = h.service.ValidateSelectedToolIDs(req.SelectedToolIDs); err != nil {
 		handleSendMessageError(c, err)
@@ -89,6 +129,8 @@ func (h *Handler) parseSendMessageInput(c *gin.Context) (appconversation.SendMes
 		Content:                 req.Content,
 		PlatformModelName:       req.Model,
 		Options:                 req.Options,
+		Controls:                req.Controls,
+		AllowRawOptions:         requestAllowsRawOptions(c),
 		ClientRunID:             req.ClientRunID,
 		FileIDs:                 req.FileIDs,
 		SelectedToolIDs:         req.SelectedToolIDs,
@@ -331,7 +373,7 @@ func (h *Handler) StreamMessage(c *gin.Context) {
 	})
 
 	if err == nil && result != nil && result.IsModerationBlocked() {
-		// Guarantee a terminal event even if live OnEvent path missed emit.
+		// 即使实时 OnEvent 路径漏发，也要确保发送终止事件。
 		if !result.ModerationTerminalEmitted() {
 			_, _ = flushStreamEvent(moderationBlockedStreamPayload(result, session.Authorization()))
 		}
@@ -385,8 +427,8 @@ func (h *Handler) CancelMessageGeneration(c *gin.Context) {
 }
 
 // StreamActiveMessageGenerations godoc
-// @Summary Stream active conversation generations
-// @Description Sends an authoritative snapshot followed by live user-scoped run state events; the snapshot is re-sent periodically for client-side reconciliation
+// @Summary 订阅进行中的会话生成
+// @Description 先推送当前用户进行中运行的权威快照，再持续推送该用户范围内的运行状态事件；快照会定期重发，供客户端对账
 // @Tags chat
 // @Produce text/event-stream
 // @Security BearerAuth

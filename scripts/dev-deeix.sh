@@ -123,7 +123,7 @@ if [ -n "${DEEIX_DEV_CONFIG:-}" ]; then
 elif [ -f "$PROJECT_DIR/config.yaml" ]; then
   CONFIG_FILE="$PROJECT_DIR/config.yaml"
 else
-  CONFIG_FILE="$PROJECT_DIR/config.sqlite.example.yaml"
+  CONFIG_FILE="$PROJECT_DIR/deploy/config.sqlite.example.yaml"
   export DATABASE_DRIVER=sqlite
   export SQLITE_PATH="$STATE_DIR/data/deeix.db"
   export CACHE_DRIVER=memory
@@ -170,7 +170,7 @@ fi
 # Run the frontend preparation once, then launch the API and Next directly.
 # Avoiding a persistent Turbo process and three pnpm wrappers saves hundreds of
 # MiB in a long-running development session without changing application code.
-(cd "$PROJECT_DIR/frontend" && pnpm run predev)
+(cd "$PROJECT_DIR/apps/web" && pnpm run predev)
 
 printf '%s\n' \
   "Starting DEEIX development services..." \

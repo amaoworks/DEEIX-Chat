@@ -15,15 +15,12 @@ import (
 )
 
 const (
-	maxNameLength           = 64
-	maxDescriptionLength    = 256
-	maxPropsSummaryLength   = 1024
-	maxPropsSchemaBytes     = 16 * 1024
-	maxRendererSourceBytes  = 256 * 1024
-	maxCatalogComponents    = 32
-	catalogPromptIntro      = "以下交互式组件按需选用：判断标准只有一条——这段内容用组件是否比纯 Markdown 更清楚、更好用（例如需要筛选、排序、计算、绘图、排期、逐步引导、对比差异或作答判分）。满足就用，不满足就用 Markdown；数量由内容决定，一条回复里几段内容各自适合不同组件就各用各的，都不适合就一个也不用。"
-	catalogPromptOutputRule = "使用时输出一个语言为 `" + domainuicomponent.FenceLanguage + "` 的代码块，内容是 JSON：{\"component\", \"id\", \"props\"}。id 是简短英文标识，在对话内唯一且稳定；props 必须符合组件说明；不要输出说明外的字段。JSON 必须合法：字符串内的英文双引号写成 \\\" 或改用中文引号“”，不要有尾随逗号和注释。"
-	catalogPromptPlacement  = "组件放在正文中合适的位置，前后仍用自然语言承接；不要把整段回复放进组件。"
+	maxNameLength          = 64
+	maxDescriptionLength   = 256
+	maxPropsSummaryLength  = 1024
+	maxPropsSchemaBytes    = 16 * 1024
+	maxRendererSourceBytes = 256 * 1024
+	maxCatalogComponents   = 32
 )
 
 // 名称同时是提示词里的标记和前端分发键，限制为 kebab-case 标识符。
@@ -196,6 +193,26 @@ func (s *Service) ResolveVisible(ctx context.Context, userID uint, ids []uint) (
 }
 
 // CatalogPrompt 生成给模型的组件目录说明。每个组件一行，渲染实现不进入提示词。
+// catalogPromptHeader 是目录层的固定部分。结构化标签与视觉排版层保持同一风格；
+// 最先说明组件是回复正文里的 Markdown 代码块、不是工具，避免模型把目录当成函数签名去调用。
+const catalogPromptHeader = `<nature>交互式组件是回复正文里的一段 Markdown 代码块，由客户端渲染成界面。它是输出格式，不是工具：不要通过 function calling / tool call 调用组件，也不要等待它返回结果。</nature>
+<when>只在组件明显比纯 Markdown 更清楚、更好用时使用（需要筛选、排序、计算、绘图、排期、逐步引导、对比、判分）；否则用 Markdown。数量由内容决定，可以为零。</when>
+<syntax>语言标识为 ` + "`" + domainuicomponent.FenceLanguage + "`" + ` 的代码块，内容是合法 JSON，只有 component、id（简短英文、对话内唯一）、props 三个字段；字符串内的英文双引号写成 \"，不要尾随逗号、注释或目录外的字段。代码块放在正文中它所属的位置，前后用自然语言承接，不要在组件外重复组件里的数据。
+` + "```" + domainuicomponent.FenceLanguage + `
+{"component": "stat-grid", "id": "kpi-week", "props": {"title": "本周指标", "items": [{"label": "日活", "value": "128,430", "delta": "+4.2%", "trend": "up"}]}}
+` + "```" + `</syntax>
+<catalog>`
+
+// 内置描述形如「定位。适用：…。交互：…」；交互说明是给选择器看的，提示词里只保留定位与适用场景。
+const (
+	propsRulesSeparator     = "。约定："
+	descriptionInteractions = "。交互："
+)
+
+const catalogPromptFooter = `
+</catalog>`
+
+// CatalogPrompt 生成注入系统提示词的组件目录层。
 func CatalogPrompt(components []domainuicomponent.Component) string {
 	if len(components) == 0 {
 		return ""
@@ -204,25 +221,31 @@ func CatalogPrompt(components []domainuicomponent.Component) string {
 		components = components[:maxCatalogComponents]
 	}
 	var builder strings.Builder
-	builder.WriteString(catalogPromptIntro)
-	builder.WriteString("\n")
-	builder.WriteString(catalogPromptOutputRule)
-	builder.WriteString("\n")
-	builder.WriteString(catalogPromptPlacement)
-	builder.WriteString("\n可用组件：")
+	builder.WriteString(catalogPromptHeader)
 	for _, component := range components {
-		builder.WriteString("\n- ")
+		builder.WriteString("\n  <component name=\"")
 		builder.WriteString(component.Name)
+		builder.WriteString("\"")
 		if component.Version > 1 {
-			builder.WriteString("（输出 version: ")
+			builder.WriteString(" version=\"")
 			builder.WriteString(strconv.Itoa(component.Version))
-			builder.WriteString("）")
+			builder.WriteString("\"")
 		}
-		builder.WriteString("：")
-		builder.WriteString(component.Description)
-		builder.WriteString("。props=")
-		builder.WriteString(component.PropsSummary)
+		builder.WriteString(">\n    <use>")
+		use, _, _ := strings.Cut(component.Description, descriptionInteractions)
+		builder.WriteString(use)
+		builder.WriteString("</use>\n    <props>")
+		props, rules, hasRules := strings.Cut(component.PropsSummary, propsRulesSeparator)
+		builder.WriteString(props)
+		builder.WriteString("</props>")
+		if hasRules {
+			builder.WriteString("\n    <rules>")
+			builder.WriteString(rules)
+			builder.WriteString("</rules>")
+		}
+		builder.WriteString("\n  </component>")
 	}
+	builder.WriteString(catalogPromptFooter)
 	return builder.String()
 }
 

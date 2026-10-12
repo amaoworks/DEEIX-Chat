@@ -195,13 +195,17 @@ type AttachmentInput struct {
 
 // SendMessageInput 定义消息发送请求。
 type SendMessageInput struct {
-	UserID                  uint
-	ConversationID          uint
-	RequestID               string
-	ContentType             string
-	Content                 string
-	PlatformModelName       string
-	Options                 map[string]any
+	UserID            uint
+	ConversationID    uint
+	RequestID         string
+	ContentType       string
+	Content           string
+	PlatformModelName string
+	Options           map[string]any
+	// Controls 是用户在模型控件上的选择 {控件 id: 取值}；参数片段由管理员在模型能力中声明。
+	Controls map[string]any
+	// AllowRawOptions 为 true（管理员）时 Options 可携带高级 JSON；否则只保留原生工具选择。
+	AllowRawOptions         bool
 	ClientRunID             string
 	FileIDs                 []string
 	SelectedToolIDs         []uint
@@ -262,7 +266,7 @@ type SendMessageResult struct {
 	LatencyMS       int64
 	DurationSeconds int64
 	StartedAt       time.Time
-	// Moderation is set when a soft-moderation barrier ran; Blocked means withdrawn.
+	// 执行了软审核屏障时设置 Moderation；Blocked 表示已撤回。
 	Moderation            *MessageModerationOutcome
 	postBillingCompaction *postBillingCompactionTask
 }

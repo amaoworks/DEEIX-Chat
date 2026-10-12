@@ -15,7 +15,7 @@ import (
 	domainconversation "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/conversation"
 	domainuser "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/domain/user"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/config"
-	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstore"
+	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/infra/objectstorage"
 	"github.com/DEEIX-AI/DEEIX-Chat/backend/internal/repository"
 )
 
@@ -388,7 +388,7 @@ func TestNormalizeDetectedMIMEDowngradesActiveContent(t *testing.T) {
 	}
 }
 
-func TestNormalizeDetectedMIMERecognizesVideoExtensions(t *testing.T) {
+func TestNormalizeDetectedMIMERecognizesMediaExtensions(t *testing.T) {
 	tests := []struct {
 		detected string
 		fileName string
@@ -396,6 +396,11 @@ func TestNormalizeDetectedMIMERecognizesVideoExtensions(t *testing.T) {
 	}{
 		{detected: "application/octet-stream", fileName: "clip.mp4", want: "video/mp4"},
 		{detected: "application/octet-stream", fileName: "clip.webm", want: "video/webm"},
+		{detected: "application/octet-stream", fileName: "clip.mov", want: "video/quicktime"},
+		{detected: "audio/mpeg", fileName: "voice.mp3", want: "audio/mpeg"},
+		{detected: "audio/wave", fileName: "voice.wav", want: "audio/wav"},
+		// m4a 的内容嗅探结果是 video/mp4，按扩展名纠正为音频。
+		{detected: "video/mp4", fileName: "voice.m4a", want: "audio/mp4"},
 	}
 	for _, tt := range tests {
 		if got := normalizeDetectedMIME(tt.detected, tt.fileName); got != tt.want {
@@ -474,6 +479,15 @@ func TestUploadFileAllowsMP4WhenVideoMP4IsAllowed(t *testing.T) {
 	}
 }
 
+func TestInferFileCategoryRecognizesAudio(t *testing.T) {
+	if got := inferFileCategory("audio/mpeg", "voice.mp3"); got != fileCategoryAudio {
+		t.Fatalf("inferFileCategory(audio/mpeg) = %q, want %q", got, fileCategoryAudio)
+	}
+	if fileCategoryRequiresProcessing(fileCategoryAudio) || maxBytesForCategory(fileCategoryAudio, config.Config{FileDocMaxBytes: 1}) != 0 {
+		t.Fatal("audio files need no extraction and are limited only by the global upload size")
+	}
+}
+
 func TestValidateImageFile(t *testing.T) {
 	repo := newUploadTestRepo()
 	store := newUploadTestStore()
@@ -547,7 +561,7 @@ type uploadTestStoreProvider struct {
 	store *uploadTestStore
 }
 
-func (p uploadTestStoreProvider) Open(ctx context.Context) (objectstore.Store, error) {
+func (p uploadTestStoreProvider) Open(ctx context.Context) (objectstorage.Store, error) {
 	_ = ctx
 	return p.store, nil
 }
@@ -561,28 +575,28 @@ func newUploadTestStore() *uploadTestStore {
 	return &uploadTestStore{objects: map[string][]byte{}}
 }
 
-func (s *uploadTestStore) Put(ctx context.Context, key string, body io.Reader, opts objectstore.PutOptions) (objectstore.ObjectInfo, error) {
+func (s *uploadTestStore) Put(ctx context.Context, key string, body io.Reader, opts objectstorage.PutOptions) (objectstorage.ObjectInfo, error) {
 	_ = ctx
 	data, err := io.ReadAll(body)
 	if err != nil {
-		return objectstore.ObjectInfo{}, err
+		return objectstorage.ObjectInfo{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.objects[key] = append([]byte(nil), data...)
-	return objectstore.ObjectInfo{Key: key, SizeBytes: int64(len(data)), ContentType: opts.ContentType, ModTime: time.Now()}, nil
+	return objectstorage.ObjectInfo{Key: key, SizeBytes: int64(len(data)), ContentType: opts.ContentType, ModTime: time.Now()}, nil
 }
 
-func (s *uploadTestStore) Open(ctx context.Context, key string) (io.ReadCloser, objectstore.ObjectInfo, error) {
+func (s *uploadTestStore) Open(ctx context.Context, key string) (io.ReadCloser, objectstorage.ObjectInfo, error) {
 	_ = ctx
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, ok := s.objects[key]
 	if !ok {
-		return nil, objectstore.ObjectInfo{}, objectstore.ErrNotFound
+		return nil, objectstorage.ObjectInfo{}, objectstorage.ErrNotFound
 	}
 	copyOfData := append([]byte(nil), data...)
-	return io.NopCloser(bytes.NewReader(copyOfData)), objectstore.ObjectInfo{Key: key, SizeBytes: int64(len(copyOfData)), ModTime: time.Now()}, nil
+	return io.NopCloser(bytes.NewReader(copyOfData)), objectstorage.ObjectInfo{Key: key, SizeBytes: int64(len(copyOfData)), ModTime: time.Now()}, nil
 }
 
 func (s *uploadTestStore) Delete(ctx context.Context, key string) error {
@@ -598,7 +612,7 @@ func (s *uploadTestStore) Materialize(ctx context.Context, key string) (string, 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.objects[key]; !ok {
-		return "", nil, objectstore.ErrNotFound
+		return "", nil, objectstorage.ErrNotFound
 	}
 	return key, func() {}, nil
 }
@@ -826,4 +840,4 @@ func cloneQuota(q domainconversation.StorageQuota) *domainconversation.StorageQu
 }
 
 var _ repository.UploadRepository = (*uploadTestRepo)(nil)
-var _ objectstore.Store = (*uploadTestStore)(nil)
+var _ objectstorage.Store = (*uploadTestStore)(nil)

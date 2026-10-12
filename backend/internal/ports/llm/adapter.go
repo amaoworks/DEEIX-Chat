@@ -87,8 +87,8 @@ func SupportsImageGenerationStream(protocol string, model string) bool {
 	case AdapterOpenAIImageEdits:
 		return openAIImageEditModelSupportsStream(model)
 	case AdapterOpenRouterImages:
-		// OpenRouter 统一图片端点对不支持原生流式的提供商会忽略 stream 并返回缓冲 JSON，
-		// 因此始终走流式入口即可同时覆盖两类提供商。
+		// OpenRouter 统一图片端点对不支持原生流式的提供方会忽略 stream 并返回缓冲 JSON，
+		// 因此始终走流式入口即可同时覆盖两类提供方。
 		return true
 	default:
 		return false
@@ -161,4 +161,53 @@ func DefaultEndpointForAdapter(adapter string) string {
 // 兼容/逆向实现即使复用 Responses 形状，也不一定支持该字段；默认保持关闭。
 func SupportsPreviousResponseID(adapter string) bool {
 	return NormalizeAdapter(adapter) == AdapterOpenAIResponses
+}
+
+// OptionPolicyProtocolKey 把路由协议（含历史别名）归一化为模型参数策略、推理能力等配置使用的协议键。
+// 注意 Google generateContent 的配置键为 gemini_generate_content。
+func OptionPolicyProtocolKey(protocol string) string {
+	switch NormalizeAdapter(protocol) {
+	case "openai":
+		return "openai_responses"
+	case "openrouter":
+		return "openrouter_responses"
+	case "anthropic", "claude":
+		return "anthropic_messages"
+	case "xai", "grok":
+		return "xai_responses"
+	case "google", "gemini":
+		return "gemini_generate_content"
+	case AdapterGoogleGenerateContent:
+		return "gemini_generate_content"
+	case AdapterGoogleImageGeneration:
+		return "google_image_generation"
+	case AdapterGeminiInteractions:
+		return "gemini_interactions"
+	case AdapterOpenAIChatCompletions:
+		return "openai_chat_completions"
+	case AdapterOpenRouterChat:
+		return "openrouter_chat_completions"
+	case AdapterOpenRouterImages:
+		return "openrouter_images"
+	case AdapterOpenRouterResponses:
+		return "openrouter_responses"
+	case AdapterOpenAIImageGenerations:
+		return "openai_image_generations"
+	case AdapterOpenAIImageEdits:
+		return "openai_image_edits"
+	case AdapterAnthropicMessages:
+		return "anthropic_messages"
+	case AdapterXAIImage:
+		return "xai_image"
+	case AdapterXAIImageEdits:
+		return "xai_image_edits"
+	case AdapterXAIVideo:
+		return "xai_video"
+	case AdapterXAIVideoExtensions:
+		return "xai_video_extensions"
+	case AdapterXAIResponses:
+		return "xai_responses"
+	default:
+		return "openai_responses"
+	}
 }

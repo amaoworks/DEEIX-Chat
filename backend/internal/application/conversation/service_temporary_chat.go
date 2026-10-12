@@ -31,6 +31,8 @@ type TemporaryChatInput struct {
 	ClientRunID              string
 	Model                    string
 	Options                  map[string]any
+	Controls                 map[string]any
+	AllowRawOptions          bool
 	SelectedToolIDs          []uint
 	SkillIDs                 []uint
 	KnowledgeBaseIDs         []string
@@ -54,6 +56,7 @@ func (s *Service) StreamTemporaryChat(
 	if err := ValidateTemporaryChatInput(input); err != nil {
 		return nil, err
 	}
+	input.Options, input.Controls = restrictUserChatOptions(input.Options, input.Controls, input.AllowRawOptions)
 	if s.routeResolver == nil || s.llmClient == nil {
 		return nil, ErrModelRouteNotConfigured
 	}
@@ -117,8 +120,8 @@ func (s *Service) StreamTemporaryChat(
 	if err != nil {
 		return nil, err
 	}
-	// Attachment processors depend on persisted file IDs. Request-scoped temporary
-	// attachments are injected directly into the model context instead.
+	// 附件处理器依赖持久化的文件 ID。请求作用域的临时
+	// 附件改为直接注入模型上下文。
 	toolRuntime = toolRuntime.withoutAttachmentProcessor()
 	skillPrompts, err := s.resolveSkillPrompts(ctx, SendMessageInput{
 		UserID:   input.UserID,
@@ -135,20 +138,22 @@ func (s *Service) StreamTemporaryChat(
 		return nil, err
 	}
 	promptPlan := buildPromptPlan(ctx, promptPlanInput{
-		BaseMessages:      messages,
-		StableAttachments: attachmentContext.stableAttachments,
-		DynamicContext:    knowledgeContext,
-		SkillPrompts:      skillPrompts,
-		ToolRuntime:       toolRuntime,
-		Config:            cfg,
+		BaseMessages:   messages,
+		TurnDocuments:  attachmentContext.documents,
+		DynamicContext: knowledgeContext,
+		SkillPrompts:   skillPrompts,
+		ToolRuntime:    toolRuntime,
+		Config:         cfg,
 	})
 	messages = stripTemporaryMessageCacheControls(promptPlan.Messages)
 	fullMessages := cloneLLMMessages(messages)
-	filteredOptions := filterModelOptions(input.Options, route.Protocol, modelOptionPolicyConfig{
+	filteredOptions, reasoningEffort := resolveChatModelOptions(input.Options, route.Protocol, modelOptionPolicyConfig{
 		Mode:                  cfg.ModelOptionPolicyMode,
 		AllowedPathsJSON:      cfg.ModelOptionAllowedPaths,
 		DeniedPathsJSON:       cfg.ModelOptionDeniedPaths,
 		ModelCapabilitiesJSON: route.ModelCapabilitiesJSON,
+		CatalogReasoning:      route.CatalogReasoning,
+		Controls:              input.Controls,
 	})
 	filteredOptions = stripTemporaryChatProviderStateOptions(filteredOptions)
 	var moderationCoord *appcm.RunCoordinator
@@ -262,6 +267,7 @@ func (s *Service) StreamTemporaryChat(
 	temporaryAssistant.Content = assistantText
 	temporaryAssistant.OutputTokens = outputTokens
 	temporaryAssistant.ReasoningTokens = usage.ReasoningTokens
+	temporaryAssistant.ReasoningEffort = optionalReasoningEffort(reasoningEffort)
 	temporaryAssistant.TokenUsage = outputTokens
 	temporaryAssistant.LatencyMS = firstTokenLatencyMS
 	temporaryAssistant.Status = "success"
@@ -328,8 +334,8 @@ func wrapTemporaryGenerationError(err error) error {
 	return wrapUpstreamRequestError(err)
 }
 
-// enforceTemporaryGenerateInput is the final privacy boundary before every
-// upstream call, including follow-up calls after tool execution.
+// enforceTemporaryGenerateInput 是每次上游调用前的最终隐私边界，
+// 包括工具执行后的后续调用。
 func enforceTemporaryGenerateInput(input llm.GenerateInput) llm.GenerateInput {
 	input.Ephemeral = true
 	input.PreviousResponseID = ""

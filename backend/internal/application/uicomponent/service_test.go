@@ -160,7 +160,7 @@ func TestResolveVisibleKeepsRequestOrderAndDropsHidden(t *testing.T) {
 
 func TestCatalogPromptListsEachComponentOnce(t *testing.T) {
 	prompt := CatalogPrompt(domainuicomponent.Builtin())
-	for _, want := range []string{"`deeix-ui`", "- card-grid：", "- data-table：", "- chart：", "props={"} {
+	for _, want := range []string{"`deeix-ui`", "<nature>", "不是工具", `<component name="card-grid">`, `<component name="data-table">`, `<component name="chart">`, "<props>{"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected %q in prompt:\n%s", want, prompt)
 		}
@@ -168,11 +168,11 @@ func TestCatalogPromptListsEachComponentOnce(t *testing.T) {
 	if CatalogPrompt(nil) != "" {
 		t.Fatal("empty catalog must produce no prompt")
 	}
-	if strings.Contains(prompt, "version") {
+	if strings.Contains(prompt, `version="`) {
 		t.Fatal("v1 components must not ask the model to emit a version")
 	}
 	v2 := CatalogPrompt([]domainuicomponent.Component{{Name: "chart", Version: 2, Description: "d", PropsSummary: "{}"}})
-	if !strings.Contains(v2, "chart（输出 version: 2）") {
+	if !strings.Contains(v2, `<component name="chart" version="2">`) {
 		t.Fatalf("breaking versions must be announced in the catalog, got %q", v2)
 	}
 }

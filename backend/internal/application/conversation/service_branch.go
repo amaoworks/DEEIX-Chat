@@ -83,7 +83,7 @@ func (s *Service) resolveMessageBranch(
 		}
 		switch sourceMessage.Role {
 		case "user":
-			// User retry/edit creates a new user sibling and a fresh assistant child.
+			// 用户重试/编辑会创建新的用户兄弟消息及新的助手子消息。
 		case "assistant":
 			if branchReason != "retry" || parentMessage == nil || parentMessage.Role != "user" {
 				return nil, ErrInvalidMessageBranch
@@ -133,18 +133,17 @@ func (s *Service) resolveMessageBranch(
 	return state, nil
 }
 
-// loadMessageBranchContext hydrates one active ancestor path in bounded pages.
-// Branch selection is deliberately kept lightweight; full messages are loaded
-// only after the route and latest rolling snapshot are known. A verified
-// snapshot boundary stops the scan early, while conversations without a
-// snapshot are read to their root so the first compaction never summarizes a
-// silently truncated suffix.
+// loadMessageBranchContext 分页有界地加载一条活动祖先路径。
+// 分支选择有意保持轻量；完整消息仅在
+// 路由与最新滚动快照确定后才加载。已验证的
+// 快照边界会提前终止扫描，而没有快照的会话
+// 会读取到根节点，确保首次压缩绝不会对
+// 被静默截断的后缀进行摘要。
 func (s *Service) loadMessageBranchContext(
 	ctx context.Context,
 	conversationID uint,
 	branch *messageBranchState,
 	snapshot *model.ContextSnapshot,
-	branchReason string,
 ) error {
 	if branch == nil || branch.ParentMessageID == nil || *branch.ParentMessageID == 0 {
 		return nil
@@ -196,10 +195,6 @@ func (s *Service) loadMessageBranchContext(
 			zap.Uint("snapshot_boundary_message_id", snapshot.CoveredUntilMessageID),
 		)
 	}
-	path = recoverAssistantRetryUserStates(path)
-	if branchReason == "default" {
-		path, _ = normalizeDefaultBranchContext(path, nil)
-	}
 	branch.ExistingMessages = path
 	return nil
 }
@@ -215,46 +210,9 @@ func contextMessagesPayloadBytes(messages []model.Message) int {
 	return total
 }
 
-func normalizeDefaultBranchContext(
-	ancestors []model.Message,
-	parent *model.Message,
-) ([]model.Message, *model.Message) {
-	if len(ancestors) == 0 {
-		if isContextMessage(parent) {
-			return ancestors, parent
-		}
-		return nil, nil
-	}
-
-	contextMessages := recoverAssistantRetryUserStates(ancestors)
-
-	end := len(contextMessages)
-	for end > 0 && !isContextMessage(&contextMessages[end-1]) {
-		end--
-	}
-	if end == 0 {
-		return nil, nil
-	}
-
-	start := 0
-	for index := end - 1; index >= 0; index-- {
-		if !isContextMessage(&contextMessages[index]) {
-			start = index + 1
-			break
-		}
-	}
-
-	normalized := append([]model.Message(nil), contextMessages[start:end]...)
-	if len(normalized) == 0 {
-		return nil, nil
-	}
-	nextParent := normalized[len(normalized)-1]
-	return normalized, &nextParent
-}
-
-// recoverAssistantRetryUserStates makes a reused user message valid context
-// after its assistant retry produced usable output. Persisted history remains
-// unchanged so the original failed run can still be diagnosed.
+// recoverAssistantRetryUserStates 在助手重试产生可用输出后，
+// 使复用的用户消息成为有效上下文。持久化历史保持
+// 不变，以便仍可诊断原先失败的运行。
 func recoverAssistantRetryUserStates(messages []model.Message) []model.Message {
 	var recovered []model.Message
 	for index := range messages {
@@ -331,6 +289,46 @@ func buildBranchMessagePath(branch *messageBranchState, userMessage *model.Messa
 	allMessages = append(allMessages, branch.ExistingMessages...)
 	allMessages = append(allMessages, *userMessage)
 	return buildMessagePath(allMessages, userMessage.ID)
+}
+
+// buildModelContextMessages 先解析完整的活动分支，再移除
+// 不可用的行。将拓扑与提示词可用性分离，可防止
+// 已取消或失败的祖先打断父链并静默
+// 丢弃其余有效历史。
+func buildModelContextMessages(branch *messageBranchState, userMessage *model.Message, branchReason string) []model.Message {
+	messages := buildBranchMessagePath(branch, userMessage)
+	messages = recoverAssistantRetryUserStates(messages)
+	messages = filterBlockedMessages(messages)
+	if !strings.EqualFold(strings.TrimSpace(branchReason), "default") {
+		return messages
+	}
+	currentMessageID := uint(0)
+	if userMessage != nil {
+		currentMessageID = userMessage.ID
+	}
+	return filterDefaultBranchContextMessages(messages, currentMessageID)
+}
+
+// filterDefaultBranchContextMessages 排除失败、已取消及待处理的
+// 历史行，但不将其视为边界。新持久化的
+// 用户行在组装其模型请求期间仍处于待处理状态，因此
+// 会被显式保留，除非审核已将其移除。
+func filterDefaultBranchContextMessages(messages []model.Message, currentMessageID uint) []model.Message {
+	if len(messages) == 0 {
+		return messages
+	}
+	filtered := make([]model.Message, 0, len(messages))
+	for index := range messages {
+		item := messages[index]
+		if currentMessageID != 0 && item.ID == currentMessageID {
+			filtered = append(filtered, item)
+			continue
+		}
+		if isContextMessage(&item) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
 
 func conversationImageTokenReserveByMessage(messages []model.Message) map[int]int64 {

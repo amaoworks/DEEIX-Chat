@@ -35,9 +35,9 @@ func translateError(err error) error {
 }
 
 func translateUniqueConstraint(err error) error {
-	// The generic uniqueness check has already validated the SQLSTATE or driver
-	// code. This narrow fallback only maps known constraint names to the more
-	// specific repository contract; it does not classify arbitrary errors.
+	// 通用唯一性检查已校验过 SQLSTATE 或驱动错误码。
+	// 此处的窄回退仅将已知约束名映射为更具体的
+	// 仓储契约，不会对任意错误进行分类。
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "idx_identity_users_username"):
@@ -61,7 +61,7 @@ func NewRepo(db *gorm.DB) *Repo {
 
 // GetByUsername 按用户名查询用户。
 func (r *Repo) GetByUsername(ctx context.Context, username string) (*domainuser.User, error) {
-	var item model.User
+	var item models.User
 	if err := r.db.WithContext(ctx).Where("username = ?", username).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -70,7 +70,7 @@ func (r *Repo) GetByUsername(ctx context.Context, username string) (*domainuser.
 
 // GetByEmail 按邮箱查询用户。
 func (r *Repo) GetByEmail(ctx context.Context, email string) (*domainuser.User, error) {
-	var item model.User
+	var item models.User
 	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -79,7 +79,7 @@ func (r *Repo) GetByEmail(ctx context.Context, email string) (*domainuser.User, 
 
 // GetByPublicID 按公开 ID 查询用户。
 func (r *Repo) GetByPublicID(ctx context.Context, publicID string) (*domainuser.User, error) {
-	var item model.User
+	var item models.User
 	if err := r.db.WithContext(ctx).Where("public_id = ?", publicID).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -106,7 +106,7 @@ func (r *Repo) ListUsersByLowerEmails(ctx context.Context, emails []string) (map
 		return results, nil
 	}
 
-	items := make([]model.User, 0)
+	items := make([]models.User, 0)
 	if err := r.db.WithContext(ctx).
 		Where("LOWER(email) IN ?", normalized).
 		Find(&items).Error; err != nil {
@@ -122,7 +122,7 @@ func (r *Repo) ListUsersByLowerEmails(ctx context.Context, emails []string) (map
 func (r *Repo) ListAllUsernames(ctx context.Context) ([]string, error) {
 	var usernames []string
 	if err := r.db.WithContext(ctx).
-		Model(&model.User{}).
+		Model(&models.User{}).
 		Pluck("username", &usernames).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -131,7 +131,7 @@ func (r *Repo) ListAllUsernames(ctx context.Context) ([]string, error) {
 
 // GetByID 按 ID 查询用户。
 func (r *Repo) GetByID(ctx context.Context, userID uint) (*domainuser.User, error) {
-	var item model.User
+	var item models.User
 	if err := r.db.WithContext(ctx).Where("id = ?", userID).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -146,7 +146,7 @@ func (r *Repo) UpdateProfile(ctx context.Context, userID uint, input repository.
 // UpdateUsernameOnce 修改用户登录名，仅允许用户自主修改一次。
 func (r *Repo) UpdateUsernameOnce(ctx context.Context, userID uint, username string, changedAt time.Time) (*domainuser.User, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var current model.User
+		var current models.User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", userID).First(&current).Error; err != nil {
 			return translateError(err)
 		}
@@ -154,13 +154,13 @@ func (r *Repo) UpdateUsernameOnce(ctx context.Context, userID uint, username str
 			return repository.ErrConflict
 		}
 		if current.Username == username {
-			return translateError(tx.Model(&model.User{}).
+			return translateError(tx.Model(&models.User{}).
 				Where("id = ?", userID).
 				Update("username_changed_at", changedAt).
 				Error)
 		}
 
-		var existing model.User
+		var existing models.User
 		err := tx.Where("LOWER(username) = ? AND id <> ?", username, userID).First(&existing).Error
 		if err == nil {
 			return repository.ErrDuplicateUsername
@@ -169,7 +169,7 @@ func (r *Repo) UpdateUsernameOnce(ctx context.Context, userID uint, username str
 			return translateError(err)
 		}
 
-		return translateError(tx.Model(&model.User{}).
+		return translateError(tx.Model(&models.User{}).
 			Where("id = ?", userID).
 			Updates(map[string]any{
 				"username":            username,
@@ -194,7 +194,7 @@ func (r *Repo) updateUserFields(ctx context.Context, userID uint, input reposito
 		return r.GetByID(ctx, userID)
 	}
 
-	if input.Role != nil && *input.Role != model.RoleSuperAdmin {
+	if input.Role != nil && *input.Role != models.RoleSuperAdmin {
 		return r.updateUserFieldsInTransaction(ctx, userID, updates, true)
 	}
 
@@ -209,10 +209,10 @@ func (r *Repo) updateUserFieldsInTransaction(
 ) (*domainuser.User, error) {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if withSuperAdminGuard {
-			var superAdmins []model.User
+			var superAdmins []models.User
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Select("id").
-				Where("role = ?", model.RoleSuperAdmin).
+				Where("role = ?", models.RoleSuperAdmin).
 				Order("id ASC").
 				Find(&superAdmins).Error; err != nil {
 				return translateError(err)
@@ -232,7 +232,7 @@ func (r *Repo) updateUserFieldsInTransaction(
 
 		if rawAvatarURL, ok := updates["avatar_url"].(string); ok {
 			if fileID, isFileAvatar := domainuser.ParseFileAvatarURL(rawAvatarURL); isFileAvatar {
-				var fileObject model.FileObject
+				var fileObject models.FileObject
 				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Select("id").
 					Where("user_id = ? AND file_id = ? AND status = ?", userID, fileID, "active").
@@ -245,7 +245,7 @@ func (r *Repo) updateUserFieldsInTransaction(
 			}
 		}
 
-		result := tx.Model(&model.User{}).
+		result := tx.Model(&models.User{}).
 			Where("id = ?", userID).
 			Updates(updates)
 		if result.Error != nil {
@@ -311,10 +311,10 @@ func userFieldUpdates(input repository.UpdateUserFieldsInput) map[string]any {
 
 // ListUsers 分页查询用户。
 func (r *Repo) ListUsers(ctx context.Context, offset int, limit int, filter repository.UserListFilter) ([]domainuser.User, int64, error) {
-	items := make([]model.User, 0)
+	items := make([]models.User, 0)
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&model.User{})
+	query := r.db.WithContext(ctx).Model(&models.User{})
 	if filter.IDs != nil {
 		query = query.Where("id IN ?", filter.IDs)
 	}
@@ -393,8 +393,8 @@ func (r *Repo) ListUsers(ctx context.Context, offset int, limit int, filter repo
 func (r *Repo) CountSuperAdmins(ctx context.Context) (int64, error) {
 	var count int64
 	if err := r.db.WithContext(ctx).
-		Model(&model.User{}).
-		Where("role = ?", model.RoleSuperAdmin).
+		Model(&models.User{}).
+		Where("role = ?", models.RoleSuperAdmin).
 		Count(&count).Error; err != nil {
 		return 0, translateError(err)
 	}
@@ -403,7 +403,7 @@ func (r *Repo) CountSuperAdmins(ctx context.Context) (int64, error) {
 
 // GetActivePlanByCode 按编码查询启用套餐。
 func (r *Repo) GetActivePlanByCode(ctx context.Context, code string) (*domainbilling.Plan, error) {
-	var item model.BillingPlan
+	var item models.BillingPlan
 	if err := r.db.WithContext(ctx).
 		Where("code = ? AND is_active = ?", code, true).
 		First(&item).Error; err != nil {
@@ -414,7 +414,7 @@ func (r *Repo) GetActivePlanByCode(ctx context.Context, code string) (*domainbil
 
 // GetActiveDefaultPriceByPlanID 查询套餐默认启用价格。
 func (r *Repo) GetActiveDefaultPriceByPlanID(ctx context.Context, planID uint) (*domainbilling.Price, error) {
-	var item model.BillingPrice
+	var item models.BillingPrice
 	if err := r.db.WithContext(ctx).
 		Where("plan_id = ? AND is_active = ? AND is_default = ?", planID, true, true).
 		First(&item).Error; err != nil {
@@ -483,7 +483,7 @@ func (r *Repo) ImportUsersWithCredentialsAndBalances(ctx context.Context, record
 				passwordSetAt = &now
 			}
 
-			dbCredential := &model.UserCredential{
+			dbCredential := &models.UserCredential{
 				UserID:            dbUser.ID,
 				PasswordHash:      record.Credential.PasswordHash,
 				PasswordAlgo:      passwordAlgo,
@@ -502,7 +502,7 @@ func (r *Repo) ImportUsersWithCredentialsAndBalances(ctx context.Context, record
 			if balanceNanousd < 0 {
 				balanceNanousd = 0
 			}
-			account := &model.BillingAccount{
+			account := &models.BillingAccount{
 				UserID:         dbUser.ID,
 				Currency:       "USD",
 				BalanceNanousd: balanceNanousd,
@@ -512,7 +512,7 @@ func (r *Repo) ImportUsersWithCredentialsAndBalances(ctx context.Context, record
 				return translateError(err)
 			}
 			if balanceNanousd > 0 {
-				transaction := &model.BalanceTransaction{
+				transaction := &models.BalanceTransaction{
 					AccountID:           account.ID,
 					UserID:              dbUser.ID,
 					Type:                domainbilling.BalanceTransactionTypeAdminSet,
@@ -560,7 +560,7 @@ func (r *Repo) createWithCredentialTx(tx *gorm.DB, input repository.CreateWithCr
 		passwordOrigin = domainuser.PasswordOriginLocalRegister
 	}
 
-	dbCredential := &model.UserCredential{
+	dbCredential := &models.UserCredential{
 		UserID:            dbUser.ID,
 		PasswordHash:      input.Credential.PasswordHash,
 		PasswordAlgo:      passwordAlgo,
@@ -577,7 +577,7 @@ func (r *Repo) createWithCredentialTx(tx *gorm.DB, input repository.CreateWithCr
 
 	if input.User.Role == domainuser.RoleUser && input.SubscriptionPlanID > 0 && input.SubscriptionPriceID > 0 {
 		now := time.Now()
-		subscription := &model.Subscription{
+		subscription := &models.Subscription{
 			UserID:               dbUser.ID,
 			PlanID:               input.SubscriptionPlanID,
 			PriceID:              input.SubscriptionPriceID,
@@ -599,7 +599,7 @@ func (r *Repo) createWithCredentialTx(tx *gorm.DB, input repository.CreateWithCr
 
 // GetCredentialByUserID 查询用户凭据。
 func (r *Repo) GetCredentialByUserID(ctx context.Context, userID uint) (*domainuser.Credential, error) {
-	var credential model.UserCredential
+	var credential models.UserCredential
 	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&credential).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -607,7 +607,7 @@ func (r *Repo) GetCredentialByUserID(ctx context.Context, userID uint) (*domainu
 }
 
 func (r *Repo) GetUserTwoFactorByUserID(ctx context.Context, userID uint) (*domainuser.UserTwoFactor, error) {
-	var item model.UserTwoFactor
+	var item models.UserTwoFactor
 	if err := r.db.WithContext(ctx).Where("user_id = ?", userID).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -643,7 +643,7 @@ func (r *Repo) UpdateUserTwoFactor(ctx context.Context, userID uint, input repos
 		return r.GetUserTwoFactorByUserID(ctx, userID)
 	}
 	result := r.db.WithContext(ctx).
-		Model(&model.UserTwoFactor{}).
+		Model(&models.UserTwoFactor{}).
 		Where("user_id = ?", userID)
 	if input.ExpectedRecoveryHash != nil {
 		result = result.Where("recovery_codes_hash = ?", *input.ExpectedRecoveryHash)
@@ -688,7 +688,7 @@ func (r *Repo) DeleteUserTwoFactor(ctx context.Context, userID uint) error {
 	result := r.db.WithContext(ctx).
 		Unscoped().
 		Where("user_id = ?", userID).
-		Delete(&model.UserTwoFactor{})
+		Delete(&models.UserTwoFactor{})
 	if result.Error != nil {
 		return translateError(result.Error)
 	}
@@ -705,10 +705,10 @@ func (r *Repo) MarkLoginFailure(
 	lockThreshold int,
 	lockUntil time.Time,
 ) (*domainuser.Credential, error) {
-	var updated model.UserCredential
+	var updated models.UserCredential
 
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var credential model.UserCredential
+		var credential models.UserCredential
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", userID).
 			First(&credential).Error; err != nil {
@@ -723,7 +723,7 @@ func (r *Repo) MarkLoginFailure(
 			updates["locked_until"] = lockUntil
 		}
 
-		if err := tx.Model(&model.UserCredential{}).
+		if err := tx.Model(&models.UserCredential{}).
 			Where("id = ?", credential.ID).
 			Updates(updates).Error; err != nil {
 			return err
@@ -745,7 +745,7 @@ func (r *Repo) MarkLoginFailure(
 // ResetLoginFailure 清零登录失败计数并解除锁定。
 func (r *Repo) ResetLoginFailure(ctx context.Context, userID uint) error {
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserCredential{}).
+		Model(&models.UserCredential{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]any{
 			"failed_login_count": 0,
@@ -757,7 +757,7 @@ func (r *Repo) ResetLoginFailure(ctx context.Context, userID uint) error {
 // UpdateUserStatus 更新用户状态。
 func (r *Repo) UpdateUserStatus(ctx context.Context, userID uint, status string) error {
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.User{}).
+		Model(&models.User{}).
 		Where("id = ?", userID).
 		Update("status", status).
 		Error)
@@ -774,9 +774,9 @@ func (r *Repo) MarkBootstrapSuperAdminPasswordResetRequired(ctx context.Context,
 		return nil
 	}
 	result := r.db.WithContext(ctx).
-		Model(&model.UserCredential{}).
+		Model(&models.UserCredential{}).
 		Where("user_id IN (?)",
-			r.db.Model(&model.User{}).
+			r.db.Model(&models.User{}).
 				Select("id").
 				Where("username = ? AND role = ? AND username_changed_at IS NULL", normalizedUsername, domainuser.RoleSuperAdmin),
 		).
@@ -796,7 +796,7 @@ func (r *Repo) UpdatePassword(ctx context.Context, userID uint, passwordHash str
 		passwordOrigin = domainuser.PasswordOriginUserSet
 	}
 	result := r.db.WithContext(ctx).
-		Model(&model.UserCredential{}).
+		Model(&models.UserCredential{}).
 		Where("user_id = ?", userID).
 		Updates(map[string]any{
 			"password_hash":       passwordHash,
@@ -821,7 +821,7 @@ func (r *Repo) UpdatePassword(ctx context.Context, userID uint, passwordHash str
 // UpdateLastLogin 更新用户最后登录时间。
 func (r *Repo) UpdateLastLogin(ctx context.Context, userID uint) error {
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.User{}).
+		Model(&models.User{}).
 		Where("id = ?", userID).
 		Update("last_login_at", time.Now()).
 		Error)
@@ -834,9 +834,9 @@ func (r *Repo) ListLatestSessionActivityByUserIDs(ctx context.Context, userIDs [
 		return results, nil
 	}
 
-	sessions := make([]model.UserSession, 0, len(userIDs))
+	sessions := make([]models.UserSession, 0, len(userIDs))
 	latestSessionQuery := r.db.WithContext(ctx).
-		Model(&model.UserSession{}).
+		Model(&models.UserSession{}).
 		Select("identity_sessions.*, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY COALESCE(last_seen_at, issued_at) DESC, id DESC) AS row_number").
 		Where("user_id IN ?", userIDs)
 
@@ -872,12 +872,12 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 			return domainknowledgebase.ErrBuiltinFileOwnerDeleteBlocked
 		}
 
-		conversationSubQuery := tx.Unscoped().Model(&model.Conversation{}).Select("id").Where("user_id = ?", userID)
-		projectSubQuery := tx.Unscoped().Model(&model.ConversationProject{}).Select("id").Where("user_id = ?", userID)
-		userSkillSubQuery := tx.Model(&model.Skill{}).Select("id").Where("scope = ? AND owner_user_id = ?", domainskill.ScopeUser, userID)
-		userKnowledgeBaseSubQuery := tx.Model(&model.KnowledgeBase{}).Select("id").Where("scope = ? AND owner_user_id = ?", domainknowledgebase.ScopeUser, userID)
-		userFileSubQuery := tx.Unscoped().Model(&model.FileObject{}).Select("id").Where("user_id = ?", userID)
-		runSubQuery := tx.Unscoped().Model(&model.ConversationRun{}).Select("run_id").Where("user_id = ?", userID)
+		conversationSubQuery := tx.Unscoped().Model(&models.Conversation{}).Select("id").Where("user_id = ?", userID)
+		projectSubQuery := tx.Unscoped().Model(&models.ConversationProject{}).Select("id").Where("user_id = ?", userID)
+		userSkillSubQuery := tx.Model(&models.Skill{}).Select("id").Where("scope = ? AND owner_user_id = ?", domainskill.ScopeUser, userID)
+		userKnowledgeBaseSubQuery := tx.Model(&models.KnowledgeBase{}).Select("id").Where("scope = ? AND owner_user_id = ?", domainknowledgebase.ScopeUser, userID)
+		userFileSubQuery := tx.Unscoped().Model(&models.FileObject{}).Select("id").Where("user_id = ?", userID)
+		runSubQuery := tx.Unscoped().Model(&models.ConversationRun{}).Select("run_id").Where("user_id = ?", userID)
 
 		steps := []struct {
 			label string
@@ -886,173 +886,173 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 			{
 				label: "identity_credentials",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserCredential{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserCredential{}).Error
 				},
 			},
 			{
 				label: "identity_sessions",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserSession{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserSession{}).Error
 				},
 			},
 			{
 				label: "identity_auth_events",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserAuthEvent{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserAuthEvent{}).Error
 				},
 			},
 			{
 				label: "identity_contact_verifications",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserContactVerification{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserContactVerification{}).Error
 				},
 			},
 			{
 				label: "identity_user_links",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserIdentity{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserIdentity{}).Error
 				},
 			},
 			{
 				label: "identity_mfa_settings",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserTwoFactor{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserTwoFactor{}).Error
 				},
 			},
 			{
 				label: "identity_trusted_devices",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.TrustedDevice{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.TrustedDevice{}).Error
 				},
 			},
 			{
 				label: "chat_context_records",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ? OR conversation_id IN (?)", userID, conversationSubQuery).Delete(&model.ChatContextRecord{}).Error
+					return db.Unscoped().Where("user_id = ? OR conversation_id IN (?)", userID, conversationSubQuery).Delete(&models.ChatContextRecord{}).Error
 				},
 			},
 			{
 				label: "chat_run_events",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ? OR run_id IN (?)", userID, runSubQuery).Delete(&model.ChatRunEvent{}).Error
+					return db.Unscoped().Where("user_id = ? OR run_id IN (?)", userID, runSubQuery).Delete(&models.ChatRunEvent{}).Error
 				},
 			},
 			{
 				label: "chat_runs",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.ConversationRun{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.ConversationRun{}).Error
 				},
 			},
 			{
 				label: "chat_attachments",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.Attachment{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.Attachment{}).Error
 				},
 			},
 			{
 				label: "chat_message_chunks",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.MessageChunk{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.MessageChunk{}).Error
 				},
 			},
 			{
 				label: "chat_feedback",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.ConversationMessageFeedback{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.ConversationMessageFeedback{}).Error
 				},
 			},
 			{
 				label: "chat_messages",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.Message{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.Message{}).Error
 				},
 			},
 			{
 				label: "chat_conversations",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.Conversation{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.Conversation{}).Error
 				},
 			},
 			{
 				label: "chat_conversation_project_mcp_tools",
 				run: func(db *gorm.DB) error {
-					return db.Where("project_id IN (?)", projectSubQuery).Delete(&model.ConversationProjectMCPTool{}).Error
+					return db.Where("project_id IN (?)", projectSubQuery).Delete(&models.ConversationProjectMCPTool{}).Error
 				},
 			},
 			{
 				label: "chat_conversation_project_skills",
 				run: func(db *gorm.DB) error {
 					return db.Where("project_id IN (?) OR skill_id IN (?)", projectSubQuery, userSkillSubQuery).
-						Delete(&model.ConversationProjectSkill{}).Error
+						Delete(&models.ConversationProjectSkill{}).Error
 				},
 			},
 			{
 				label: "chat_conversation_project_knowledge_bases",
 				run: func(db *gorm.DB) error {
 					return db.Where("project_id IN (?) OR knowledge_base_id IN (?)", projectSubQuery, userKnowledgeBaseSubQuery).
-						Delete(&model.ConversationProjectKnowledgeBase{}).Error
+						Delete(&models.ConversationProjectKnowledgeBase{}).Error
 				},
 			},
 			{
 				label: "chat_conversation_projects",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.ConversationProject{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.ConversationProject{}).Error
 				},
 			},
 			{
 				label: "skills",
 				run: func(db *gorm.DB) error {
-					return db.Where("scope = ? AND owner_user_id = ?", domainskill.ScopeUser, userID).Delete(&model.Skill{}).Error
+					return db.Where("scope = ? AND owner_user_id = ?", domainskill.ScopeUser, userID).Delete(&models.Skill{}).Error
 				},
 			},
 			{
 				label: "knowledge_base_files",
 				run: func(db *gorm.DB) error {
 					return db.Where("knowledge_base_id IN (?) OR file_object_id IN (?)", userKnowledgeBaseSubQuery, userFileSubQuery).
-						Delete(&model.KnowledgeBaseFile{}).Error
+						Delete(&models.KnowledgeBaseFile{}).Error
 				},
 			},
 			{
 				label: "knowledge_bases",
 				run: func(db *gorm.DB) error {
 					return db.Where("scope = ? AND owner_user_id = ?", domainknowledgebase.ScopeUser, userID).
-						Delete(&model.KnowledgeBase{}).Error
+						Delete(&models.KnowledgeBase{}).Error
 				},
 			},
 			{
 				label: "file_chunks",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.FileChunk{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.FileChunk{}).Error
 				},
 			},
 			{
 				label: "file_objects",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.FileObject{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.FileObject{}).Error
 				},
 			},
 			{
 				label: "file_storage_quotas",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserStorageQuota{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserStorageQuota{}).Error
 				},
 			},
 			{
 				label: "user_memories",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserMemory{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserMemory{}).Error
 				},
 			},
 			{
 				label: "user_settings",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.UserSetting{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.UserSetting{}).Error
 				},
 			},
 			{
 				label: "permission_group_user_access",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.PermissionGroupUserAccess{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.PermissionGroupUserAccess{}).Error
 				},
 			},
 			// 财务审计事实不在账号硬删除中清理：
@@ -1061,19 +1061,19 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 			{
 				label: "billing_subscriptions",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.Subscription{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.Subscription{}).Error
 				},
 			},
 			{
 				label: "billing_accounts",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("user_id = ?", userID).Delete(&model.BillingAccount{}).Error
+					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.BillingAccount{}).Error
 				},
 			},
 			{
 				label: "user",
 				run: func(db *gorm.DB) error {
-					return db.Unscoped().Where("id = ?", userID).Delete(&model.User{}).Error
+					return db.Unscoped().Where("id = ?", userID).Delete(&models.User{}).Error
 				},
 			},
 		}
@@ -1092,7 +1092,7 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 func (r *Repo) ListDistinctFileStoragePathsByUserID(ctx context.Context, userID uint) ([]string, error) {
 	paths := make([]string, 0)
 	if err := r.db.WithContext(ctx).
-		Model(&model.FileObject{}).
+		Model(&models.FileObject{}).
 		Distinct("storage_path").
 		Where("user_id = ? AND storage_path <> ''", userID).
 		Pluck("storage_path", &paths).Error; err != nil {
@@ -1103,7 +1103,7 @@ func (r *Repo) ListDistinctFileStoragePathsByUserID(ctx context.Context, userID 
 
 // RecordAuthEvent 写入认证事件。
 func (r *Repo) RecordAuthEvent(ctx context.Context, input repository.AuthEventInput) error {
-	item := &model.UserAuthEvent{
+	item := &models.UserAuthEvent{
 		RequestID:  input.RequestID,
 		UserID:     input.UserID,
 		EventType:  input.EventType,
@@ -1131,7 +1131,7 @@ func (r *Repo) CreateSession(ctx context.Context, item *domainuser.Session) erro
 
 // GetSessionByUserAndSessionID 查询用户会话。
 func (r *Repo) GetSessionByUserAndSessionID(ctx context.Context, userID uint, sessionID string) (*domainuser.Session, error) {
-	var item model.UserSession
+	var item models.UserSession
 	if err := r.db.WithContext(ctx).
 		Where("user_id = ? AND session_id = ?", userID, sessionID).
 		First(&item).Error; err != nil {
@@ -1142,15 +1142,29 @@ func (r *Repo) GetSessionByUserAndSessionID(ctx context.Context, userID uint, se
 
 // RotateSessionTokens 以会话行锁原子校验并轮换令牌信息。
 func (r *Repo) RotateSessionTokens(ctx context.Context, input repository.RotateSessionTokensInput) error {
-	return translateError(r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var item model.UserSession
+	// 重用检测的吊销必须被提交，因此不能通过"回调返回错误"来表达（那会回滚整个事务）。
+	// 用局部变量把裁决带出事务，提交后再向调用方报告。
+	reuseDetected := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item models.UserSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ? AND session_id = ?", input.UserID, input.SessionID).
 			First(&item).Error; err != nil {
 			return translateError(err)
 		}
 
-		if !sessionAcceptsPresentedRefreshHash(item, input.PresentedRefreshHash, input.Now, input.PreviousTokenGrace) {
+		switch classifyPresentedRefreshHash(item, input.PresentedRefreshHash, input.Now, input.PreviousTokenGrace) {
+		case refreshHashCurrent, refreshHashPreviousInGrace:
+			// 不做处理，继续执行 switch 之后的轮换逻辑
+		case refreshHashReused:
+			// 已轮换的令牌在宽限期外再次出现：要么是被盗令牌，要么是持有旧令牌的
+			// 客户端与持有新令牌的攻击者并存。无法区分，因此吊销整个会话（OAuth 2.1 §4.3.1）。
+			reuseDetected = true
+			return translateError(tx.Model(&models.UserSession{}).
+				Where("id = ?", item.ID).
+				Updates(map[string]any{"revoked_at": input.Now, "revoke_reason": "refresh_token_reuse"}).
+				Error)
+		default:
 			return repository.ErrInvalidInput
 		}
 
@@ -1165,33 +1179,57 @@ func (r *Repo) RotateSessionTokens(ctx context.Context, input repository.RotateS
 			"revoke_reason":               "",
 		}
 
-		return translateError(tx.Model(&model.UserSession{}).
+		return translateError(tx.Model(&models.UserSession{}).
 			Where("id = ?", item.ID).
 			Updates(updates).
 			Error)
-	}))
+	})
+	if err != nil {
+		return translateError(err)
+	}
+	if reuseDetected {
+		return repository.ErrRefreshTokenReuse
+	}
+	return nil
 }
 
-func sessionAcceptsPresentedRefreshHash(
-	item model.UserSession,
+type refreshHashMatch int
+
+const (
+	// refreshHashUnknown 表示令牌与该会话无关（或会话已失效）。
+	refreshHashUnknown refreshHashMatch = iota
+	// refreshHashCurrent 表示当前有效令牌。
+	refreshHashCurrent
+	// refreshHashPreviousInGrace 表示上一枚令牌且仍在轮换宽限期内（容忍丢失的轮换响应）。
+	refreshHashPreviousInGrace
+	// refreshHashReused 表示上一枚令牌在宽限期外被使用：视为令牌重用。
+	refreshHashReused
+)
+
+func classifyPresentedRefreshHash(
+	item models.UserSession,
 	presentedHash string,
 	now time.Time,
 	previousTokenGrace time.Duration,
-) bool {
+) refreshHashMatch {
 	normalizedPresentedHash := strings.TrimSpace(presentedHash)
 	if normalizedPresentedHash == "" {
-		return false
+		return refreshHashUnknown
 	}
 	if item.RevokedAt != nil || !item.ExpiresAt.After(now) {
-		return false
+		return refreshHashUnknown
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(item.RefreshTokenHash)), []byte(normalizedPresentedHash)) == 1 {
-		return true
+		return refreshHashCurrent
 	}
-	if previousTokenGrace <= 0 || item.RefreshRotatedAt == nil || now.Sub(*item.RefreshRotatedAt) > previousTokenGrace {
-		return false
+	previous := strings.TrimSpace(item.PreviousRefreshTokenHash)
+	if previous == "" || subtle.ConstantTimeCompare([]byte(previous), []byte(normalizedPresentedHash)) != 1 {
+		return refreshHashUnknown
 	}
-	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(item.PreviousRefreshTokenHash)), []byte(normalizedPresentedHash)) == 1
+	if previousTokenGrace > 0 && item.RefreshRotatedAt != nil && now.Sub(*item.RefreshRotatedAt) <= previousTokenGrace {
+		return refreshHashPreviousInGrace
+	}
+	return refreshHashReused
 }
 
 // TouchSessionActivity 更新会话最近活跃时间及审计元数据。
@@ -1202,7 +1240,7 @@ func (r *Repo) TouchSessionActivity(ctx context.Context, userID uint, sessionID 
 	}
 
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserSession{}).
+		Model(&models.UserSession{}).
 		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL", userID, sessionID).
 		Updates(updates).
 		Error)
@@ -1274,7 +1312,7 @@ func sessionActivityUpdates(input repository.UpdateSessionActivityInput) map[str
 func (r *Repo) RevokeSession(ctx context.Context, userID uint, sessionID string, reason string) error {
 	now := time.Now()
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserSession{}).
+		Model(&models.UserSession{}).
 		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL", userID, sessionID).
 		Updates(map[string]any{
 			"revoked_at":    now,
@@ -1287,7 +1325,7 @@ func (r *Repo) RevokeSession(ctx context.Context, userID uint, sessionID string,
 func (r *Repo) RevokeAllSessions(ctx context.Context, userID uint, reason string) error {
 	now := time.Now()
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserSession{}).
+		Model(&models.UserSession{}).
 		Where("user_id = ? AND revoked_at IS NULL", userID).
 		Updates(map[string]any{
 			"revoked_at":    now,
@@ -1298,7 +1336,7 @@ func (r *Repo) RevokeAllSessions(ctx context.Context, userID uint, reason string
 
 // ListActiveSessionsByUserID 查询用户当前活跃会话。
 func (r *Repo) ListActiveSessionsByUserID(ctx context.Context, userID uint, now time.Time) ([]domainuser.Session, error) {
-	items := make([]model.UserSession, 0)
+	items := make([]models.UserSession, 0)
 	if err := r.db.WithContext(ctx).
 		Where("user_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, now).
 		Order("COALESCE(last_seen_at, issued_at) DESC").
@@ -1311,10 +1349,10 @@ func (r *Repo) ListActiveSessionsByUserID(ctx context.Context, userID uint, now 
 
 // ListAuthEvents 查询用户认证事件。
 func (r *Repo) ListAuthEvents(ctx context.Context, input repository.AuthEventListInput) ([]domainuser.AuthEvent, int64, error) {
-	items := make([]model.UserAuthEvent, 0)
+	items := make([]models.UserAuthEvent, 0)
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&model.UserAuthEvent{})
+	query := r.db.WithContext(ctx).Model(&models.UserAuthEvent{})
 	if input.UserID > 0 {
 		query = query.Where("user_id = ?", input.UserID)
 	}
@@ -1339,7 +1377,7 @@ func (r *Repo) ListAuthEvents(ctx context.Context, input repository.AuthEventLis
 	return toDomainAuthEvents(items), total, nil
 }
 
-func toDomainUser(item model.User) *domainuser.User {
+func toDomainUser(item models.User) *domainuser.User {
 	return &domainuser.User{
 		ID:                    item.ID,
 		PublicID:              item.PublicID,
@@ -1367,7 +1405,7 @@ func toDomainUser(item model.User) *domainuser.User {
 }
 
 func (r *Repo) ListIdentityProviders(ctx context.Context, includeDisabled bool) ([]domainuser.IdentityProvider, error) {
-	items := make([]model.AuthIdentityProvider, 0)
+	items := make([]models.AuthIdentityProvider, 0)
 	query := r.db.WithContext(ctx).Order("sort_order ASC, id ASC")
 	if !includeDisabled {
 		query = query.Where("login_enabled = ? OR registration_enabled = ?", true, true)
@@ -1381,9 +1419,9 @@ func (r *Repo) ListIdentityProviders(ctx context.Context, includeDisabled bool) 
 func (r *Repo) HasActiveSuperAdminIdentity(ctx context.Context) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).
-		Model(&model.UserIdentity{}).
+		Model(&models.UserIdentity{}).
 		Joins("JOIN identity_users ON identity_users.id = identity_user_links.user_id").
-		Where("identity_users.role = ? AND identity_users.status = ?", model.RoleSuperAdmin, model.UserStatusActive).
+		Where("identity_users.role = ? AND identity_users.status = ?", models.RoleSuperAdmin, models.UserStatusActive).
 		Count(&count).Error
 	if err != nil {
 		return false, translateError(err)
@@ -1392,7 +1430,7 @@ func (r *Repo) HasActiveSuperAdminIdentity(ctx context.Context) (bool, error) {
 }
 
 func (r *Repo) GetIdentityProviderByPublicID(ctx context.Context, publicID string) (*domainuser.IdentityProvider, error) {
-	var item model.AuthIdentityProvider
+	var item models.AuthIdentityProvider
 	if err := r.db.WithContext(ctx).Where("public_id = ?", publicID).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -1400,7 +1438,7 @@ func (r *Repo) GetIdentityProviderByPublicID(ctx context.Context, publicID strin
 }
 
 func (r *Repo) GetIdentityProviderBySlug(ctx context.Context, slug string) (*domainuser.IdentityProvider, error) {
-	var item model.AuthIdentityProvider
+	var item models.AuthIdentityProvider
 	if err := r.db.WithContext(ctx).Where("slug = ?", slug).First(&item).Error; err != nil {
 		return nil, translateError(err)
 	}
@@ -1429,7 +1467,7 @@ func (r *Repo) UpdateIdentityProvider(ctx context.Context, publicID string, inpu
 		return r.GetIdentityProviderByPublicID(ctx, publicID)
 	}
 	result := r.db.WithContext(ctx).
-		Model(&model.AuthIdentityProvider{}).
+		Model(&models.AuthIdentityProvider{}).
 		Where("public_id = ?", publicID).
 		Updates(updates)
 	if result.Error != nil {
@@ -1515,7 +1553,7 @@ func identityProviderUpdates(input repository.UpdateIdentityProviderInput) map[s
 func (r *Repo) UpdateIdentityProviderSortOrders(ctx context.Context, publicIDs []string) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for index, publicID := range publicIDs {
-			result := tx.Model(&model.AuthIdentityProvider{}).
+			result := tx.Model(&models.AuthIdentityProvider{}).
 				Where("public_id = ?", publicID).
 				Update("sort_order", (index+1)*100)
 			if result.Error != nil {
@@ -1531,7 +1569,7 @@ func (r *Repo) UpdateIdentityProviderSortOrders(ctx context.Context, publicIDs [
 
 func (r *Repo) DeleteIdentityProvider(ctx context.Context, publicID string, force bool) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var provider model.AuthIdentityProvider
+		var provider models.AuthIdentityProvider
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("public_id = ?", publicID).
 			First(&provider).Error; err != nil {
@@ -1547,7 +1585,7 @@ func (r *Repo) DeleteIdentityProvider(ctx context.Context, publicID string, forc
 }
 
 func (r *Repo) ensureIdentityProviderDeleteAllowed(ctx context.Context, tx *gorm.DB, providerID uint) error {
-	providerIdentities := make([]model.UserIdentity, 0)
+	providerIdentities := make([]models.UserIdentity, 0)
 	if err := tx.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("provider_id = ?", providerID).
@@ -1563,7 +1601,7 @@ func (r *Repo) ensureIdentityProviderDeleteAllowed(ctx context.Context, tx *gorm
 		}
 		checkedUserIDs[providerIdentity.UserID] = struct{}{}
 
-		var credential model.UserCredential
+		var credential models.UserCredential
 		if err := tx.WithContext(ctx).
 			Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", providerIdentity.UserID).
@@ -1576,7 +1614,7 @@ func (r *Repo) ensureIdentityProviderDeleteAllowed(ctx context.Context, tx *gorm
 
 		var identityCount int64
 		if err := tx.WithContext(ctx).
-			Model(&model.UserIdentity{}).
+			Model(&models.UserIdentity{}).
 			Where("user_id = ?", providerIdentity.UserID).
 			Count(&identityCount).Error; err != nil {
 			return translateError(err)
@@ -1592,7 +1630,7 @@ func (r *Repo) ensureIdentityProviderDeleteAllowed(ctx context.Context, tx *gorm
 }
 
 func (r *Repo) deleteStaleIdentityProvidersBySlug(ctx context.Context, tx *gorm.DB, slug string) error {
-	staleProviders := make([]model.AuthIdentityProvider, 0)
+	staleProviders := make([]models.AuthIdentityProvider, 0)
 	if err := tx.WithContext(ctx).
 		Unscoped().
 		Where("slug = ? AND deleted_at IS NOT NULL", slug).
@@ -1611,13 +1649,13 @@ func (r *Repo) deleteIdentityProviderByIDHard(ctx context.Context, tx *gorm.DB, 
 	if err := tx.WithContext(ctx).
 		Unscoped().
 		Where("provider_id = ?", providerID).
-		Delete(&model.UserIdentity{}).Error; err != nil {
+		Delete(&models.UserIdentity{}).Error; err != nil {
 		return translateError(err)
 	}
 	result := tx.WithContext(ctx).
 		Unscoped().
 		Where("id = ?", providerID).
-		Delete(&model.AuthIdentityProvider{})
+		Delete(&models.AuthIdentityProvider{})
 	if result.Error != nil {
 		return translateError(result.Error)
 	}
@@ -1628,7 +1666,7 @@ func (r *Repo) deleteIdentityProviderByIDHard(ctx context.Context, tx *gorm.DB, 
 }
 
 func (r *Repo) GetUserIdentityByProviderSubject(ctx context.Context, providerID uint, subject string) (*domainuser.UserIdentity, error) {
-	var item model.UserIdentity
+	var item models.UserIdentity
 	if err := r.db.WithContext(ctx).
 		Where("provider_id = ? AND provider_subject = ?", providerID, subject).
 		First(&item).Error; err != nil {
@@ -1638,7 +1676,7 @@ func (r *Repo) GetUserIdentityByProviderSubject(ctx context.Context, providerID 
 }
 
 func (r *Repo) ListUserIdentitiesByUserID(ctx context.Context, userID uint) ([]domainuser.UserIdentity, error) {
-	items := make([]model.UserIdentity, 0)
+	items := make([]models.UserIdentity, 0)
 	if err := r.db.WithContext(ctx).
 		Where("user_id = ?", userID).
 		Order("id ASC").
@@ -1657,7 +1695,7 @@ func (r *Repo) ListUserIdentitiesByUserIDs(ctx context.Context, userIDs []uint) 
 	if len(userIDs) == 0 {
 		return results, nil
 	}
-	items := make([]model.UserIdentity, 0)
+	items := make([]models.UserIdentity, 0)
 	if err := r.db.WithContext(ctx).
 		Where("user_id IN ?", userIDs).
 		Order("user_id ASC, id ASC").
@@ -1691,7 +1729,7 @@ func (r *Repo) deleteStaleUserIdentitiesByProviderSubject(ctx context.Context, t
 	if err := tx.WithContext(ctx).
 		Unscoped().
 		Where("provider_id = ? AND provider_subject = ? AND deleted_at IS NOT NULL", providerID, subject).
-		Delete(&model.UserIdentity{}).Error; err != nil {
+		Delete(&models.UserIdentity{}).Error; err != nil {
 		return translateError(err)
 	}
 	return nil
@@ -1699,14 +1737,14 @@ func (r *Repo) deleteStaleUserIdentitiesByProviderSubject(ctx context.Context, t
 
 func (r *Repo) DeleteUserIdentity(ctx context.Context, userID uint, identityID uint) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var credential model.UserCredential
+		var credential models.UserCredential
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", userID).
 			First(&credential).Error; err != nil {
 			return translateError(err)
 		}
 
-		identities := make([]model.UserIdentity, 0)
+		identities := make([]models.UserIdentity, 0)
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("user_id = ?", userID).
 			Order("id ASC").
@@ -1731,7 +1769,7 @@ func (r *Repo) DeleteUserIdentity(ctx context.Context, userID uint, identityID u
 		result := tx.
 			Unscoped().
 			Where("id = ? AND user_id = ?", identityID, userID).
-			Delete(&model.UserIdentity{})
+			Delete(&models.UserIdentity{})
 		if result.Error != nil {
 			return translateError(result.Error)
 		}
@@ -1745,7 +1783,7 @@ func (r *Repo) DeleteUserIdentity(ctx context.Context, userID uint, identityID u
 func (r *Repo) UpdateUserIdentityLogin(ctx context.Context, identityID uint, profileJSON string, providerDisplayName string, email string, emailVerified bool) error {
 	now := time.Now()
 	result := r.db.WithContext(ctx).
-		Model(&model.UserIdentity{}).
+		Model(&models.UserIdentity{}).
 		Where("id = ?", identityID).
 		Updates(map[string]any{
 			"profile_json":          profileJSON,
@@ -1766,10 +1804,10 @@ func (r *Repo) UpdateUserIdentityLogin(ctx context.Context, identityID uint, pro
 func (r *Repo) CancelPendingContactVerifications(ctx context.Context, channel string, purpose string, target string) error {
 	now := time.Now()
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserContactVerification{}).
-		Where("channel = ? AND purpose = ? AND target = ? AND status = ?", channel, purpose, target, model.ContactVerificationStatusPending).
+		Model(&models.UserContactVerification{}).
+		Where("channel = ? AND purpose = ? AND target = ? AND status = ?", channel, purpose, target, models.ContactVerificationStatusPending).
 		Updates(map[string]any{
-			"status":      model.ContactVerificationStatusCanceled,
+			"status":      models.ContactVerificationStatusCanceled,
 			"consumed_at": now,
 		}).Error)
 }
@@ -1777,10 +1815,10 @@ func (r *Repo) CancelPendingContactVerifications(ctx context.Context, channel st
 func (r *Repo) CancelPendingContactVerificationsForUser(ctx context.Context, userID uint, channel string, purpose string, target string) error {
 	now := time.Now()
 	return translateError(r.db.WithContext(ctx).
-		Model(&model.UserContactVerification{}).
-		Where("user_id = ? AND channel = ? AND purpose = ? AND target = ? AND status = ?", userID, channel, purpose, target, model.ContactVerificationStatusPending).
+		Model(&models.UserContactVerification{}).
+		Where("user_id = ? AND channel = ? AND purpose = ? AND target = ? AND status = ?", userID, channel, purpose, target, models.ContactVerificationStatusPending).
 		Updates(map[string]any{
-			"status":      model.ContactVerificationStatusCanceled,
+			"status":      models.ContactVerificationStatusCanceled,
 			"consumed_at": now,
 		}).Error)
 }
@@ -1794,9 +1832,9 @@ func (r *Repo) CreateContactVerification(ctx context.Context, item *domainuser.C
 }
 
 func (r *Repo) GetPendingContactVerification(ctx context.Context, channel string, purpose string, target string, now time.Time) (*domainuser.ContactVerification, error) {
-	var item model.UserContactVerification
+	var item models.UserContactVerification
 	if err := r.db.WithContext(ctx).
-		Where("channel = ? AND purpose = ? AND target = ? AND status = ?", channel, purpose, target, model.ContactVerificationStatusPending).
+		Where("channel = ? AND purpose = ? AND target = ? AND status = ?", channel, purpose, target, models.ContactVerificationStatusPending).
 		Where("expires_at IS NULL OR expires_at > ?", now).
 		Order("id DESC").
 		First(&item).Error; err != nil {
@@ -1806,9 +1844,9 @@ func (r *Repo) GetPendingContactVerification(ctx context.Context, channel string
 }
 
 func (r *Repo) GetPendingContactVerificationForUser(ctx context.Context, userID uint, channel string, purpose string, target string, now time.Time) (*domainuser.ContactVerification, error) {
-	var item model.UserContactVerification
+	var item models.UserContactVerification
 	if err := r.db.WithContext(ctx).
-		Where("user_id = ? AND channel = ? AND purpose = ? AND target = ? AND status = ?", userID, channel, purpose, target, model.ContactVerificationStatusPending).
+		Where("user_id = ? AND channel = ? AND purpose = ? AND target = ? AND status = ?", userID, channel, purpose, target, models.ContactVerificationStatusPending).
 		Where("expires_at IS NULL OR expires_at > ?", now).
 		Order("id DESC").
 		First(&item).Error; err != nil {
@@ -1819,7 +1857,7 @@ func (r *Repo) GetPendingContactVerificationForUser(ctx context.Context, userID 
 
 func (r *Repo) IncrementContactVerificationAttempt(ctx context.Context, verificationID uint) error {
 	result := r.db.WithContext(ctx).
-		Model(&model.UserContactVerification{}).
+		Model(&models.UserContactVerification{}).
 		Where("id = ?", verificationID).
 		UpdateColumn("attempt_count", gorm.Expr("attempt_count + ?", 1))
 	if result.Error != nil {
@@ -1833,10 +1871,10 @@ func (r *Repo) IncrementContactVerificationAttempt(ctx context.Context, verifica
 
 func (r *Repo) MarkContactVerificationVerified(ctx context.Context, verificationID uint, now time.Time) error {
 	result := r.db.WithContext(ctx).
-		Model(&model.UserContactVerification{}).
-		Where("id = ? AND status = ?", verificationID, model.ContactVerificationStatusPending).
+		Model(&models.UserContactVerification{}).
+		Where("id = ? AND status = ?", verificationID, models.ContactVerificationStatusPending).
 		Updates(map[string]any{
-			"status":      model.ContactVerificationStatusVerified,
+			"status":      models.ContactVerificationStatusVerified,
 			"verified_at": now,
 			"consumed_at": now,
 		})
@@ -1849,7 +1887,7 @@ func (r *Repo) MarkContactVerificationVerified(ctx context.Context, verification
 	return nil
 }
 
-func toDomainUsers(items []model.User) []domainuser.User {
+func toDomainUsers(items []models.User) []domainuser.User {
 	results := make([]domainuser.User, 0, len(items))
 	for _, item := range items {
 		results = append(results, *toDomainUser(item))
@@ -1857,12 +1895,12 @@ func toDomainUsers(items []model.User) []domainuser.User {
 	return results
 }
 
-func toModelUser(item *domainuser.User) *model.User {
+func toModelUser(item *domainuser.User) *models.User {
 	if item == nil {
-		return &model.User{}
+		return &models.User{}
 	}
-	return &model.User{
-		BaseModel: model.BaseModel{
+	return &models.User{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
@@ -1889,7 +1927,7 @@ func toModelUser(item *domainuser.User) *model.User {
 	}
 }
 
-func toDomainPlan(item model.BillingPlan) *domainbilling.Plan {
+func toDomainPlan(item models.BillingPlan) *domainbilling.Plan {
 	return &domainbilling.Plan{
 		ID:                  item.ID,
 		Code:                item.Code,
@@ -1904,7 +1942,7 @@ func toDomainPlan(item model.BillingPlan) *domainbilling.Plan {
 	}
 }
 
-func toDomainPrice(item model.BillingPrice) *domainbilling.Price {
+func toDomainPrice(item models.BillingPrice) *domainbilling.Price {
 	return &domainbilling.Price{
 		ID:               item.ID,
 		PlanID:           item.PlanID,
@@ -1920,7 +1958,7 @@ func toDomainPrice(item model.BillingPrice) *domainbilling.Price {
 	}
 }
 
-func toDomainCredential(item model.UserCredential) *domainuser.Credential {
+func toDomainCredential(item models.UserCredential) *domainuser.Credential {
 	return &domainuser.Credential{
 		ID:                item.ID,
 		UserID:            item.UserID,
@@ -1938,7 +1976,7 @@ func toDomainCredential(item model.UserCredential) *domainuser.Credential {
 	}
 }
 
-func toDomainUserTwoFactor(item model.UserTwoFactor) *domainuser.UserTwoFactor {
+func toDomainUserTwoFactor(item models.UserTwoFactor) *domainuser.UserTwoFactor {
 	return &domainuser.UserTwoFactor{
 		ID:                     item.ID,
 		UserID:                 item.UserID,
@@ -1955,12 +1993,12 @@ func toDomainUserTwoFactor(item model.UserTwoFactor) *domainuser.UserTwoFactor {
 	}
 }
 
-func toModelUserTwoFactor(item *domainuser.UserTwoFactor) *model.UserTwoFactor {
+func toModelUserTwoFactor(item *domainuser.UserTwoFactor) *models.UserTwoFactor {
 	if item == nil {
-		return &model.UserTwoFactor{}
+		return &models.UserTwoFactor{}
 	}
-	return &model.UserTwoFactor{
-		BaseModel: model.BaseModel{
+	return &models.UserTwoFactor{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
@@ -1977,7 +2015,7 @@ func toModelUserTwoFactor(item *domainuser.UserTwoFactor) *model.UserTwoFactor {
 	}
 }
 
-func toDomainSession(item model.UserSession) *domainuser.Session {
+func toDomainSession(item models.UserSession) *domainuser.Session {
 	return &domainuser.Session{
 		ID:                       item.ID,
 		SessionID:                item.SessionID,
@@ -2014,7 +2052,7 @@ func toDomainSession(item model.UserSession) *domainuser.Session {
 	}
 }
 
-func toDomainSessions(items []model.UserSession) []domainuser.Session {
+func toDomainSessions(items []models.UserSession) []domainuser.Session {
 	results := make([]domainuser.Session, 0, len(items))
 	for _, item := range items {
 		results = append(results, *toDomainSession(item))
@@ -2022,12 +2060,12 @@ func toDomainSessions(items []model.UserSession) []domainuser.Session {
 	return results
 }
 
-func toModelSession(item *domainuser.Session) *model.UserSession {
+func toModelSession(item *domainuser.Session) *models.UserSession {
 	if item == nil {
-		return &model.UserSession{}
+		return &models.UserSession{}
 	}
-	return &model.UserSession{
-		BaseModel: model.BaseModel{
+	return &models.UserSession{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
@@ -2064,7 +2102,7 @@ func toModelSession(item *domainuser.Session) *model.UserSession {
 	}
 }
 
-func toDomainAuthEvents(items []model.UserAuthEvent) []domainuser.AuthEvent {
+func toDomainAuthEvents(items []models.UserAuthEvent) []domainuser.AuthEvent {
 	results := make([]domainuser.AuthEvent, 0, len(items))
 	for _, item := range items {
 		results = append(results, domainuser.AuthEvent{
@@ -2085,7 +2123,7 @@ func toDomainAuthEvents(items []model.UserAuthEvent) []domainuser.AuthEvent {
 	return results
 }
 
-func toDomainContactVerification(item model.UserContactVerification) *domainuser.ContactVerification {
+func toDomainContactVerification(item models.UserContactVerification) *domainuser.ContactVerification {
 	return &domainuser.ContactVerification{
 		ID:           item.ID,
 		UserID:       item.UserID,
@@ -2105,12 +2143,12 @@ func toDomainContactVerification(item model.UserContactVerification) *domainuser
 	}
 }
 
-func toModelContactVerification(item *domainuser.ContactVerification) *model.UserContactVerification {
+func toModelContactVerification(item *domainuser.ContactVerification) *models.UserContactVerification {
 	if item == nil {
-		return &model.UserContactVerification{}
+		return &models.UserContactVerification{}
 	}
-	return &model.UserContactVerification{
-		BaseModel: model.BaseModel{
+	return &models.UserContactVerification{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
@@ -2130,7 +2168,7 @@ func toModelContactVerification(item *domainuser.ContactVerification) *model.Use
 	}
 }
 
-func toDomainIdentityProviders(items []model.AuthIdentityProvider) []domainuser.IdentityProvider {
+func toDomainIdentityProviders(items []models.AuthIdentityProvider) []domainuser.IdentityProvider {
 	results := make([]domainuser.IdentityProvider, 0, len(items))
 	for _, item := range items {
 		results = append(results, *toDomainIdentityProvider(item))
@@ -2138,7 +2176,7 @@ func toDomainIdentityProviders(items []model.AuthIdentityProvider) []domainuser.
 	return results
 }
 
-func toDomainIdentityProvider(item model.AuthIdentityProvider) *domainuser.IdentityProvider {
+func toDomainIdentityProvider(item models.AuthIdentityProvider) *domainuser.IdentityProvider {
 	return &domainuser.IdentityProvider{
 		ID:                  item.ID,
 		PublicID:            item.PublicID,
@@ -2170,12 +2208,12 @@ func toDomainIdentityProvider(item model.AuthIdentityProvider) *domainuser.Ident
 	}
 }
 
-func toModelIdentityProvider(item *domainuser.IdentityProvider) *model.AuthIdentityProvider {
+func toModelIdentityProvider(item *domainuser.IdentityProvider) *models.AuthIdentityProvider {
 	if item == nil {
-		return &model.AuthIdentityProvider{}
+		return &models.AuthIdentityProvider{}
 	}
-	return &model.AuthIdentityProvider{
-		BaseModel: model.BaseModel{
+	return &models.AuthIdentityProvider{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,
@@ -2207,7 +2245,7 @@ func toModelIdentityProvider(item *domainuser.IdentityProvider) *model.AuthIdent
 	}
 }
 
-func toDomainUserIdentity(item model.UserIdentity) *domainuser.UserIdentity {
+func toDomainUserIdentity(item models.UserIdentity) *domainuser.UserIdentity {
 	return &domainuser.UserIdentity{
 		ID:                  item.ID,
 		UserID:              item.UserID,
@@ -2225,12 +2263,12 @@ func toDomainUserIdentity(item model.UserIdentity) *domainuser.UserIdentity {
 	}
 }
 
-func toModelUserIdentity(item *domainuser.UserIdentity) *model.UserIdentity {
+func toModelUserIdentity(item *domainuser.UserIdentity) *models.UserIdentity {
 	if item == nil {
-		return &model.UserIdentity{}
+		return &models.UserIdentity{}
 	}
-	return &model.UserIdentity{
-		BaseModel: model.BaseModel{
+	return &models.UserIdentity{
+		BaseModel: models.BaseModel{
 			ID:        item.ID,
 			CreatedAt: item.CreatedAt,
 			UpdatedAt: item.UpdatedAt,

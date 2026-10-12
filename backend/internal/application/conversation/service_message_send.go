@@ -31,6 +31,7 @@ const (
 
 // SendMessage 发送消息并调用上游渠道对话接口，支持多模态附件。
 func (s *Service) SendMessage(ctx context.Context, input SendMessageInput) (result *SendMessageResult, retErr error) {
+	input.Options, input.Controls = restrictUserChatOptions(input.Options, input.Controls, input.AllowRawOptions)
 	return s.sendMessageInternal(ctx, input, nil, false)
 }
 
@@ -42,6 +43,7 @@ func (s *Service) StreamMessage(
 	onDelta func(string) error,
 ) (result *SendMessageResult, retErr error) {
 	input.Cancelable = true
+	input.Options, input.Controls = restrictUserChatOptions(input.Options, input.Controls, input.AllowRawOptions)
 	return s.sendMessageInternal(ctx, input, onDelta, true)
 }
 
@@ -278,8 +280,8 @@ func (s *Service) sendMessageInternal(
 				retainedOutput = true
 				applyRetainedGenerationRunUsage(run, retained, len(toolCallRows), startedAt)
 			}
-			// Input checks and any retained visible output continue after
-			// cancel/interrupt/error; either surface may still block the turn.
+			// 在取消/中断/出错后，输入检查及任何保留的可见输出
+			// 仍会继续审核；任一检查面都可能拦截该轮次。
 			if moderationCoord != nil {
 				if result == nil && userMessage != nil && assistantMessage != nil {
 					result = &SendMessageResult{
@@ -423,7 +425,6 @@ func (s *Service) sendMessageInternal(
 		input.ConversationID,
 		branchState,
 		prefetch.snapshot,
-		normalizedBranchReason,
 	); err != nil {
 		if s.logger != nil {
 			s.logger.Warn("conversation_context_load_failed",
@@ -439,8 +440,7 @@ func (s *Service) sendMessageInternal(
 
 	// 构建完整活跃分支路径。完整消息仅在模型路由与滚动快照已解析后按需加载，
 	// 避免默认分支定位和 Prompt 规划分别水合同一批附件与引用。
-	contextMessages := filterBlockedMessages(buildBranchMessagePath(branchState, userMessage))
-	contextMessages = recoverAssistantRetryUserStates(contextMessages)
+	contextMessages := buildModelContextMessages(branchState, userMessage, normalizedBranchReason)
 
 	// 软阈值压缩仍可按配置在响应后异步执行；只有当前请求已经越过所选模型的
 	// 有效输入预算时，才同步生成滚动快照，避免本轮先被静默截断、下一轮才补摘要。
@@ -598,10 +598,13 @@ func (s *Service) sendMessageInternal(
 			userCtx.Memory = s.selectRelevantUserMemories(ctx, input.UserID, input.Content, otherMems, 5)
 		}
 	}
-	processTraceAttachments := attachmentProcessTraceItems(fileContextPlan.Attachments)
-	if traceRecorder != nil && shouldShowAttachmentProcessTrace(processTraceAttachments) {
-		summary, markdown, payload := buildAttachmentProcessTrace(fileMode, processTraceAttachments)
-		traceRecorder.appendProcessSection(summary, markdown, payload, messageTraceStatusStreaming)
+	// 文件上下文展示按本次路由的最终决定呈现（原生 PDF、模型不支持的图片），而不只是路由无关的文件规划；
+	// 原生文档在这里读取一次，路由提示词与故障转移共用同一份缓存，展示与实际请求一致。
+	nativeInputCache := newNativeInputCache()
+	fileTrace := attachmentRouteTrace{fileMode: fileMode, items: attachmentProcessTraceItems(fileContextPlan.Attachments), skipImages: imageAttachmentRoutingActive}
+	fileTrace.resolve(ctx, s, route, fileContextPlan.Attachments, nativeInputCache)
+	if traceRecorder != nil && fileTrace.visible() {
+		traceRecorder.appendProcessSection(fileTrace.summary, fileTrace.markdown, fileTrace.payload, messageTraceStatusStreaming)
 	}
 
 	rag, err := s.retrieveMessageRAGContext(ctx, messageRAGRetrievalInput{
@@ -620,10 +623,14 @@ func (s *Service) sendMessageInternal(
 	ragFallbacks := rag.fallbacks
 	ragContextChunks := rag.chunks
 	userCtx.RAGNotice = rag.notice
-	stableFullContextAttachments := append([]AttachmentInput{}, fileContextPlan.FullAttachments...)
-	stableFullContextAttachments = append(stableFullContextAttachments, ragFallbackEvidenceAttachments(rag.retrievalFallbacks)...)
-	userCtx.Attachments = imageAttachmentsForCurrentUser(stableFullContextAttachments)
+	// 检索失败或未命中后的全文回退取决于本轮问题，只随本轮动态上下文发送；
+	// 确定性的全文文件已由 placeTurnDocuments 写入所属轮次。
+	userCtx.Files = ragFallbackEvidenceAttachments(rag.retrievalFallbacks)
+	// 检索命中的图片随本轮消息发送，但不进入稳定上下文：它随查询变化，不能参与前缀缓存指纹。
+	turnImageAttachments := append(append([]AttachmentInput{}, fileContextPlan.FullAttachments...), rag.imageEvidence...)
+	userCtx.Attachments = imageAttachmentsForCurrentUser(turnImageAttachments)
 	userCtx.RAGChunks = ragContextChunks
+	userCtx.UnretrievedFiles = rag.unretrieved
 	assistantMessage.KnowledgeSources = messageKnowledgeSourcesFromRAGChunks(ragContextChunks)
 	// 语义召回注入：收集异步结果（与 RAG 解耦，独立运行）。
 	// recallCh 为 nil 时（未启用语义召回或当前分支没有历史消息）直接跳过。
@@ -673,7 +680,8 @@ func (s *Service) sendMessageInternal(
 		HTMLVisualPromptEnabled: input.HTMLVisualPromptEnabled,
 		UIComponents:            uiComponents,
 		DomainMessages:          promptScope.activeMessages(),
-		StableAttachments:       stableFullContextAttachments,
+		ConversationFiles:       fileContextPlan.Attachments,
+		NativeInputs:            nativeInputCache,
 		DynamicContext:          userCtx,
 		PreferencePrompt:        preferencePrompt,
 		SkillPrompts:            skillPrompts,
@@ -699,7 +707,7 @@ func (s *Service) sendMessageInternal(
 		tools:                  toolRuntime.definitions,
 		promptCacheSessionKey:  promptCacheSessionKey,
 		statefulContextConfig:  buildPromptContextConfigSignature(cfg),
-		statefulContextState:   buildPromptContextStateSignature(stableFullContextAttachments, prefixMemories),
+		statefulContextState:   buildPromptContextStateSignature(prefixMemories),
 		normalizedBranchReason: normalizedBranchReason,
 		attributionReferer:     attributionReferer,
 		attributionTitle:       attributionTitle,
@@ -712,6 +720,7 @@ func (s *Service) sendMessageInternal(
 		Mode:                     routeGenerationInitial,
 		TraceRecorder:            traceRecorder,
 	})
+	runState.applyReasoningEffort(plan.reasoningEffort)
 	runner.routeConfig = plan.routeConfig
 	if plan.generateInput.ResponsesBackground {
 		sendSpan.SetAttributes(attribute.Bool("conversation.responses_background", true))
@@ -766,6 +775,11 @@ func (s *Service) sendMessageInternal(
 		route = nextRoute
 		attemptedRouteIDs = append(attemptedRouteIDs, route.RouteID)
 		routeFailureRecorded = false
+		if traceRecorder != nil && fileTrace.visible() {
+			previousSummary, previousMarkdown := fileTrace.summary, fileTrace.markdown
+			fileTrace.resolve(ctx, s, route, fileContextPlan.Attachments, nativeInputCache)
+			traceRecorder.replaceProcessSection(previousSummary, previousMarkdown, fileTrace.summary, fileTrace.markdown, fileTrace.payload)
+		}
 		nextPromptPlan, nextReasoningContentPassback, buildErr := s.planRoutePrompt(ctx, input.UserID, routePromptInput, route)
 		if buildErr != nil {
 			retErr = buildErr
@@ -780,6 +794,7 @@ func (s *Service) sendMessageInternal(
 			Mode:                     routeGenerationFailover,
 			TraceRecorder:            traceRecorder,
 		})
+		runState.applyReasoningEffort(plan.reasoningEffort)
 		runner.beginRouteFailover(plan.routeConfig)
 		sendSpan.SetAttributes(
 			attribute.Bool("conversation.route_failover", true),
@@ -1041,7 +1056,7 @@ func (s *Service) sendMessageInternal(
 		PlatformModelName: conversation.Model,
 		ContextConfig:     gen.statefulContextConfig,
 		ContextState:      gen.statefulContextState,
-		Messages:          buildNextStatefulPrefixMessages(fullLLMMessages, input.Content, assistantText, assistantReasoningContent),
+		Messages:          buildNextStatefulPrefixMessages(fullLLMMessages, assistantText, assistantReasoningContent),
 		Tools:             toolRuntime.definitions,
 		Options:           filteredOptions,
 	})
@@ -1209,7 +1224,7 @@ func (s *Service) sendMessageInternal(
 		StartedAt:             startedAt,
 		postBillingCompaction: postBillingCompaction,
 	}
-	// Soft moderation barrier: show checking, then block or pass.
+	// 软审核屏障：先显示检查中，再拦截或放行。
 	if moderationCoord != nil {
 		outputImages := s.loadOutputImagesForModeration(ctx, moderationCoord, input.UserID, assistantMessage.Attachments)
 		s.completeModerationAfterSuccess(ctx, completeModerationAfterSuccessInput{
@@ -1236,6 +1251,7 @@ func messageKnowledgeSourcesFromRAGChunks(chunks []model.RAGChunk) []model.Messa
 			ChunkIndex: chunk.ChunkIndex,
 			Score:      chunk.Score,
 			Preview:    textutil.CompactSnippet(chunk.Content, 100),
+			Modality:   chunk.Modality,
 		})
 	}
 	return sources
