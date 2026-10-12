@@ -78,8 +78,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+            echo "::notice::Desktop packages skipped: TAURI_SIGNING_PRIVATE_KEY is not configured."
+            echo "id=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           tag="${{ github.ref_name }}"
           # tauri-action needs the numeric REST id, so the REST API is used throughout.
           # Drafts have no tag yet, so they are matched on tag_name in the list.
@@ -123,7 +129,7 @@ jobs:
     needs: release
     # On a manual run (no tag) no release is created and the legs only upload
     # workflow artifacts, so a skipped release job is fine.
-    if: ${{ !cancelled() && needs.release.result != 'failure' }}
+    if: ${{ !cancelled() && needs.release.result != 'failure' && (github.ref_type != 'tag' || needs.release.outputs.id != '') }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write # upload assets into the draft release
