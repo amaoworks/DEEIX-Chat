@@ -158,7 +158,7 @@ func (f *fakeVoce) DownloadFile(context.Context, string, string, bool) (*http.Re
 	return nil, errors.New("not used")
 }
 func (f *fakeVoce) UpdateName(context.Context, string, string) error { return nil }
-func (f *fakeVoce) Events(context.Context, string, int64) (*http.Response, error) {
+func (f *fakeVoce) Events(context.Context, string, string, int64) (*http.Response, error) {
 	return nil, errors.New("not used")
 }
 

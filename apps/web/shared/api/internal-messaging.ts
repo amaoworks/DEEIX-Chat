@@ -11,7 +11,7 @@ import type {
 const ROOT = "/api/v1/internal-messaging";
 
 export function getInternalMessagingStatus(accessToken: string) {
-  return authedRequest<InternalMessagingStatus>(`${ROOT}/status`, { accessToken }, false);
+  return authedRequest<InternalMessagingStatus>(`${ROOT}/status`, { accessToken });
 }
 
 export function listInternalMessagingUsers(accessToken: string, query = "", page = 1, signal?: AbortSignal) {
@@ -133,5 +133,5 @@ export function searchInternalMessagingMessages(
 
 export function openInternalMessagingEvents(accessToken: string, after?: number, signal?: AbortSignal) {
   const suffix = after ? `?after=${after}` : "";
-  return authedFetch(`${ROOT}/events${suffix}`, { method: "GET", accessToken, signal }, false);
+  return authedFetch(`${ROOT}/events${suffix}`, { method: "GET", accessToken, signal });
 }

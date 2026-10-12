@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	voceport "github.com/DEEIX-AI/DEEIX-Chat/backend/internal/ports/vocechat"
+	"github.com/google/uuid"
 )
 
 type Client struct {
@@ -43,12 +45,16 @@ func New(baseURL, secret string, timeout time.Duration) *Client {
 // LoginAs mints a short-lived third-party key inside the private network and
 // exchanges it immediately. Neither key nor VoceChat token reaches the browser.
 func (c *Client) LoginAs(ctx context.Context, publicID, name string) (Login, error) {
+	return c.loginAs(ctx, publicID, name, "deeix-internal-messaging")
+}
+
+func (c *Client) loginAs(ctx context.Context, publicID, name, device string) (Login, error) {
 	var key string
 	if err := c.requestJSON(ctx, http.MethodPost, "/api/token/create_third_party_key", "", map[string]string{"userid": publicID, "username": name}, &key, http.Header{"X-SECRET": []string{c.secret}}); err != nil {
 		return Login{}, err
 	}
 	var login Login
-	payload := map[string]any{"credential": map[string]string{"type": "thirdparty", "key": key}, "device": "deeix-internal-messaging"}
+	payload := map[string]any{"credential": map[string]string{"type": "thirdparty", "key": key}, "device": device}
 	if err := c.requestJSON(ctx, http.MethodPost, "/api/token/login", "", payload, &login, nil); err != nil {
 		return Login{}, err
 	}
@@ -194,8 +200,27 @@ func (c *Client) UpdateName(ctx context.Context, token, name string) error {
 	return c.requestJSON(ctx, http.MethodPut, "/api/user/", token, map[string]string{"name": name}, nil, nil)
 }
 
-func (c *Client) Events(ctx context.Context, token string, afterMID int64) (*http.Response, error) {
-	query := url.Values{"api-key": []string{token}}
+func (c *Client) Events(ctx context.Context, publicID, name string, afterMID int64) (*http.Response, error) {
+	// VoceChat permits only one SSE per user/device. Give each browser stream
+	// its own temporary device so tabs, reconnects and app instances cannot
+	// kick one another off the upstream connection.
+	login, err := c.loginAs(ctx, publicID, name, "deeix-sse-"+uuid.NewString())
+	if err != nil {
+		return nil, err
+	}
+	logout := func() {
+		// Browser cancellation must not cancel removal of the temporary device.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		defer cancel()
+		_ = c.requestJSON(cleanupCtx, http.MethodGet, "/api/token/logout", login.Token, nil, nil, nil)
+	}
+	opened := false
+	defer func() {
+		if !opened {
+			logout()
+		}
+	}()
+	query := url.Values{"api-key": []string{login.Token}}
 	if afterMID > 0 {
 		query.Set("after_mid", fmt.Sprint(afterMID))
 	}
@@ -211,7 +236,24 @@ func (c *Client) Events(ctx context.Context, token string, afterMID int64) (*htt
 		defer resp.Body.Close()
 		return nil, responseError(resp)
 	}
+	resp.Body = &eventSessionBody{ReadCloser: resp.Body, logout: logout}
+	opened = true
 	return resp, nil
+}
+
+type eventSessionBody struct {
+	io.ReadCloser
+	logout func()
+	once   sync.Once
+	err    error
+}
+
+func (b *eventSessionBody) Close() error {
+	b.once.Do(func() {
+		b.err = b.ReadCloser.Close()
+		b.logout()
+	})
+	return b.err
 }
 
 func (c *Client) requestJSON(ctx context.Context, method, path, token string, payload, output any, headers http.Header) error {

@@ -71,7 +71,7 @@ type voceClient interface {
 	SendFile(context.Context, string, int64, string) (int64, error)
 	DownloadFile(context.Context, string, string, bool) (*http.Response, error)
 	UpdateName(context.Context, string, string) error
-	Events(context.Context, string, int64) (*http.Response, error)
+	Events(context.Context, string, string, int64) (*http.Response, error)
 }
 
 type Service struct {
@@ -547,12 +547,11 @@ func (s *Service) Events(ctx context.Context, actorID uint, afterMID int64) (*ht
 	if actor == nil || !available(*actor) {
 		return nil, ErrRecipientUnavailable
 	}
-	login, err := s.loginAndBind(ctx, *actor)
-	if err != nil {
+	if _, err := s.loginAndBind(ctx, *actor); err != nil {
 		return nil, err
 	}
 	started := time.Now()
-	response, err := s.voce.Events(ctx, login.Token, afterMID)
+	response, err := s.voce.Events(ctx, actor.PublicID, voceName(*actor), afterMID)
 	s.observeVoce(started, err == nil)
 	if err != nil {
 		s.loginCache.Delete(actor.ID)
