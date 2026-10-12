@@ -16,6 +16,7 @@ apps/desktop/src-tauri (Rust)
         ├── sidecar            src/sidecar.rs    bundled Go server for local mode (loopback, SQLite)
         ├── session            src/session.rs    server choice + keychain + refresh (token never exposed to JS)
         ├── tray               src/tray.rs       show / quit, left click restores the window
+        ├── menu               src/menu.rs       macOS menu bar: File ▸ Close Tab ⌘W / Close Window ⇧⌘W
         ├── OAuth loopback     src/oauth_loopback.rs  RFC 8252 receiver on 127.0.0.1:<ephemeral>
         ├── updater            tauri-plugin-updater + apps/web/shared/platform/desktop-updater.ts
         └── CSP                no inline/remote scripts; network open to http(s) (user picks the server)
@@ -56,6 +57,23 @@ close hides the window and the app stays behind the tray — a second launch
 focuses the running copy (`tauri-plugin-single-instance`) rather than starting
 another sidecar on the same database. On Linux close quits: a tray icon is not
 guaranteed there, so a hidden window could be unreachable.
+
+Because one window holds every tab, macOS gets its own menu bar
+(`src/menu.rs`): Tauri's default menu binds ⌘W to Close Window, and with a close
+turned into a hide a stray ⌘W would make the whole app disappear instead of
+closing a tab. The menu replaces that binding the way browsers do — ⌘W closes
+the tab that is showing and ⇧⌘W the window — with one deviation: the last tab is
+never closed, since closing it would forget its server (token deleted, sidecar
+stopped). ⌘W there closes the window instead, and the item says so: with a
+single tab File reads `Close Window ⌘W`, with more it reads `Close Tab ⌘W` and
+adds `Close Window ⇧⌘W`. The red traffic light and the tray still close/hide the
+window.
+
+⇧⌘W needs a nudge: AppKit matches it against the shifted key equivalent `W`,
+while a Tauri accelerator string only ever produces the unshifted `w`, which
+would leave the item printed but inert. `menu::promote_shifted_shortcut` fixes
+the installed item through AppKit. (Tauri's own `Edit ▸ Redo` ⇧⌘Z has the same
+defect and is not touched here.)
 
 Every tab is a full instance of the web app with its own DOM, caches, SSE
 connections and in-memory session, so the app never has to model "several

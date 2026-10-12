@@ -18,6 +18,7 @@ import {
 import { ConversationShareDialog, sharePatchFromDTO, useSidebarConversationField } from "@/entities/conversation";
 import { ChatArea, ChatAreaLoadError, ChatAreaSkeleton } from "@/features/chat/components/sections/chat-area";
 import { ChatArtifactWorkspace } from "@/features/chat/components/sections/chat-artifact";
+import { ChatUIBlockPanel } from "@/features/chat/components/sections/chat-ui-block-panel";
 import { ChatEmptyState } from "@/features/chat/components/sections/chat-empty";
 import { ChatInput } from "@/features/chat/components/sections/chat-input";
 import { ChatScreenshotPreviewDialog } from "@/features/chat/components/sections/chat-screenshot-preview-dialog";
@@ -31,7 +32,7 @@ import { useChatConversationActions } from "@/features/chat/hooks/use-chat-conve
 import { useChatFileDrag } from "@/features/chat/hooks/use-chat-file-drag";
 import { useChatMCPTools } from "@/features/chat/hooks/use-chat-mcp-tools";
 import { useChatUIComponents } from "@/features/chat/hooks/use-chat-ui-components";
-import { UIBlockRegistryProvider } from "@/shared/components/markdown/ui-blocks";
+import { UIBlockActionsProvider, UIBlockRegistryProvider } from "@/shared/components/markdown/ui-blocks";
 import { useChatMediaAttachmentActions } from "@/features/chat/hooks/use-chat-media-attachment-actions";
 import { useChatModelControlState } from "@/features/chat/hooks/use-chat-model-control-state";
 import { useChatModelOptionState } from "@/features/chat/hooks/use-chat-model-option-state";
@@ -50,6 +51,7 @@ import { useChatViewerProfile } from "@/features/chat/hooks/use-chat-viewer-prof
 import { useChatVisualPrompt } from "@/features/chat/hooks/use-chat-visual-prompt";
 import { useChatConversationDefaults } from "@/features/chat/hooks/use-chat-conversation-defaults";
 import { useChatTemporaryRuntime } from "@/features/chat/hooks/use-chat-temporary-runtime";
+import { useChatUIBlockStateRuntime } from "@/features/chat/hooks/use-chat-ui-block-state";
 import { filterAvailableMCPToolIDs } from "@/features/chat/model/chat-mcp-tool-defaults";
 import type {
   ChatRegenerateReasoningOptions,
@@ -232,6 +234,7 @@ export function AppChatArea() {
     showProcessTrace,
     billingDisplayCurrency,
     billingDisplayUsdToCnyRate,
+    billingEnabled,
     modelOptionPolicy,
     mcpMaxSelectedTools,
     selectedPlatformModelName,
@@ -427,6 +430,9 @@ export function AppChatArea() {
     setAttachments((current) => current.filter((item) => !consumedIDs.has(item.fileID)));
   }, [setAttachments, transferAttachments]);
 
+  // Interactive component state lives above both runtimes: persistent chats write
+  // it per message, temporary chats only send it with the next turn.
+  const uiBlockState = useChatUIBlockStateRuntime();
   const {
     currentLeafMessage,
     onCycleMessageBranch,
@@ -438,6 +444,7 @@ export function AppChatArea() {
     onRetryAssistantMessage,
     onRetryUserMessage,
     onSendMessage,
+    onSendText,
     onStopMessage,
     onDeleteQueuedMessage,
     onEditQueuedMessage,
@@ -484,6 +491,7 @@ export function AppChatArea() {
     onConversationRunStarted: registerConversationRun,
     resumingActivityLabel,
     resumingRunID,
+    collectUIStates: uiBlockState.collectTurnUIStates,
   });
   const generating = sending;
   const uploadDropDisabled = loading || uploading;
@@ -668,15 +676,30 @@ export function AppChatArea() {
     onDraftChange: setDraft,
     onAttachmentsConsumed: onTemporaryAttachmentsConsumed,
     releaseAttachments,
+    collectUIStates: uiBlockState.collectTurnUIStates,
   });
   const displayMessages = temporaryMode ? temporaryRuntime.messages : messagesWithInlineError;
+  const chatUIBlockState = React.useMemo(
+    () => ({ store: uiBlockState.store, conversationPublicID: temporaryMode ? null : conversationID }),
+    [conversationID, temporaryMode, uiBlockState.store],
+  );
   const artifactWorkspace = useChatArtifacts({
     scopeKey: conversationID,
     transient: temporaryMode,
     messages: displayMessages,
   });
   const { workspaceRef, artifactResizing, onArtifactResizeStart } = useChatArtifactResize(artifactWorkspace);
-  const hasInlineArtifact = Boolean(artifactWorkspace.activeArtifact && artifactWorkspace.isInlineViewport);
+  const activeBlock = artifactWorkspace.activeBlock;
+  const activeBlockMessage = activeBlock ? displayMessages.find((message) => message.key === activeBlock.messageKey) : undefined;
+  const blockPanel = activeBlock ? (
+    <ChatUIBlockPanel
+      message={activeBlockMessage}
+      blockKey={activeBlock.blockKey}
+      store={uiBlockState.store}
+      onClose={artifactWorkspace.closeBlock}
+    />
+  ) : null;
+  const hasInlineArtifact = Boolean((artifactWorkspace.activeArtifact || activeBlock) && artifactWorkspace.isInlineViewport);
   const workspaceGridColumns = hasInlineArtifact
     ? `minmax(0, ${1 - artifactWorkspace.artifactRatio}fr) minmax(0, ${artifactWorkspace.artifactRatio}fr)`
     : "minmax(0, 1fr) minmax(0, 0fr)";
@@ -696,6 +719,35 @@ export function AppChatArea() {
   });
 
   const composerSending = temporaryMode ? temporaryRuntime.sending : generating;
+  const sendTemporaryText = temporaryRuntime.sendText;
+  // A custom component's ask fills the composer. It may replace an empty draft
+  // or text a component put there, never what the user typed.
+  const draftRef = React.useRef(draft);
+  draftRef.current = draft;
+  const prefilledRef = React.useRef("");
+  const prefillComposer = React.useCallback(
+    (text: string) => {
+      const current = draftRef.current;
+      if (current.trim() && current !== prefilledRef.current) {
+        toast.info(t("markdown.uiBlock.prefillSkipped"));
+        return;
+      }
+      prefilledRef.current = text;
+      setDraft(text);
+      toast.success(t("markdown.uiBlock.prefilled"));
+    },
+    [setDraft, t],
+  );
+  const uiBlockActions = React.useMemo(
+    () => ({
+      ask: (text: string) => {
+        void (temporaryMode ? sendTemporaryText(text) : onSendText(text));
+      },
+      prefill: prefillComposer,
+      busy: composerSending,
+    }),
+    [composerSending, onSendText, prefillComposer, sendTemporaryText, temporaryMode],
+  );
   const composerConversationMode = temporaryMode ? temporaryRuntime.messages.length > 0 : isConversationMode;
   const composerLoading =
     !temporaryMode &&
@@ -717,6 +769,7 @@ export function AppChatArea() {
     modelOptions,
     billingDisplayCurrency,
     billingDisplayUsdToCnyRate,
+    billingEnabled,
     selectedPlatformModelName,
     availableTools: temporaryMode ? temporaryAvailableTools : availableTools,
     selectedToolIDs: temporaryMode ? temporarySelectedToolIDs : selectedToolIDs,
@@ -771,6 +824,7 @@ export function AppChatArea() {
 
   return (
     <UIBlockRegistryProvider components={uiComponents}>
+    <UIBlockActionsProvider actions={uiBlockActions}>
     <div
       className="relative flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden md:overflow-visible"
       onDragEnter={onFileDragEnter}
@@ -828,6 +882,7 @@ export function AppChatArea() {
                   messages={displayMessages}
                   attachmentContentLoader={temporaryMode ? temporaryRuntime.loadAttachmentContent : undefined}
                   persistMessageFeedback={!temporaryMode}
+                  uiBlockState={chatUIBlockState}
                   allowFullToolResults={!temporaryMode}
                   busy={composerSending}
                   messageContentRef={messageContentRef}
@@ -847,6 +902,7 @@ export function AppChatArea() {
                   onEditImageAttachment={onEditGeneratedImageAttachment}
                   onExtendVideoAttachment={onExtendGeneratedVideoAttachment}
                   onOpenCodeArtifact={artifactWorkspace.openArtifact}
+                  onOpenUIBlock={artifactWorkspace.openBlock}
                   onCycleMessageBranch={onCycleMessageBranch}
                   onToggleStar={temporaryMode ? undefined : onToggleActiveConversationStar}
                   onRename={temporaryMode ? undefined : onRenameActiveConversation}
@@ -905,6 +961,7 @@ export function AppChatArea() {
 
           <ChatArtifactWorkspace
             artifact={artifactWorkspace.activeArtifact}
+            blockPanel={blockPanel}
             artifacts={artifactWorkspace.artifacts}
             isInlineViewport={artifactWorkspace.isInlineViewport}
             onArtifactChange={artifactWorkspace.selectArtifact}
@@ -975,6 +1032,7 @@ export function AppChatArea() {
         </>
       ) : null}
     </div>
+    </UIBlockActionsProvider>
     </UIBlockRegistryProvider>
   );
 }

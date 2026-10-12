@@ -2,6 +2,7 @@ import { MODERATION_BLOCKED_BILLED_REASON, parseBillingSnapshot } from "@/featur
 import type { ChatAreaMessage, MessageAttachment } from "@/features/chat/types/messages";
 import type { MessageDTO, UpstreamDebugInfo } from "@/shared/api/conversation-types";
 import { normalizeMessageReasoningEffort } from "@/features/chat/model/chat-reasoning-effort";
+import { isUIBlockState } from "@/shared/components/markdown/ui-blocks/ui-block-state";
 import { isRecord, parseJSON } from "@/shared/lib/type-guards";
 
 function parseAttachmentDurationSeconds(value: unknown): number | undefined {
@@ -228,6 +229,12 @@ export function mapServerMessage(
     msg.cacheWriteTokens = item.cacheWriteTokens ?? 0;
   }
   if (item.role === "assistant") {
+    // Only the keys the user changed are sent back; unknown shapes are dropped so
+    // a malformed payload never reaches a block.
+    const uiState = isUIBlockState(item.uiState) ? item.uiState : undefined;
+    if (uiState && Object.keys(uiState).length > 0) {
+      msg.uiState = uiState;
+    }
     msg.inputTokens = item.inputTokens ?? 0;
     msg.outputTokens = item.outputTokens ?? 0;
     msg.cacheReadTokens = item.cacheReadTokens ?? 0;
@@ -272,6 +279,8 @@ export function mapServerMessage(
       msg.inlineAlert = {
         title: labels.generationInterrupted,
         message: resolveAssistantErrorMessage(item, labels, details),
+        // The server sets errorRequestID only for failed assistant messages; it survives reloads.
+        errorId: item.errorRequestID?.trim() || undefined,
         details,
       };
     }

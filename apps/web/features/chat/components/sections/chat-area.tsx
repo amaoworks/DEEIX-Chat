@@ -29,7 +29,9 @@ import {
 import { ChatResponseOutlineRail } from "@/features/chat/components/sections/chat-response-outline-rail";
 import { ChatScreenshotSelectionBar } from "@/features/chat/components/sections/chat-screenshot-selection-bar";
 import { useChatMessageFeedback } from "@/features/chat/hooks/use-chat-message-feedback";
+import { useChatUIBlockStateBinding } from "@/features/chat/hooks/use-chat-ui-block-state";
 import type { OpenCodeArtifactInput } from "@/features/chat/model/chat-artifacts";
+import type { ChatUIBlockStateStore } from "@/features/chat/model/chat-ui-block-state-store";
 import { areChatAreaMessagesRenderEqual } from "@/features/chat/model/chat-message-render";
 import { MAX_SCREENSHOT_MESSAGES } from "@/features/chat/model/conversation-screenshot";
 import type { ChatRegenerateReasoningOptions } from "@/features/chat/model/chat-reasoning-effort";
@@ -41,6 +43,8 @@ import { ConversationShareExportIconDropdown } from "@/entities/conversation";
 import { useCopyAction } from "@/shared/components/copy-action";
 import type { FileContentLoader } from "@/entities/file";
 import { StreamdownRender } from "@/shared/components/markdown/streamdown-render";
+import { messageUIBlocksText, useUIBlockRegistry } from "@/shared/components/markdown/ui-blocks";
+import { isUIBlockState } from "@/shared/components/markdown/ui-blocks/ui-block-state";
 import { PoweredByDeeix } from "@/shared/components/powered-by-deeix";
 import { useBranding } from "@/shared/config/branding-provider";
 import type { BillingDisplayCurrency } from "@/entities/billing";
@@ -92,6 +96,12 @@ type ChatAreaProps = {
   messages: ChatAreaMessage[];
   messagesReadOnly?: boolean;
   persistMessageFeedback?: boolean;
+  // Interactive component state. Absent: blocks keep plain local state.
+  uiBlockState?: {
+    store: ChatUIBlockStateStore;
+    // Conversation the state is written to; null keeps it in memory only.
+    conversationPublicID: string | null;
+  };
   busy: boolean;
   messageContentRef: React.RefObject<HTMLDivElement | null>;
   onScroll: (event: React.UIEvent<HTMLDivElement>) => void;
@@ -112,6 +122,8 @@ type ChatAreaProps = {
   onEditImageAttachment?: (attachment: MessageAttachment, sourceModelName?: string) => void;
   onExtendVideoAttachment?: (attachment: MessageAttachment, sourceModelName?: string) => void;
   onOpenCodeArtifact?: (message: ChatAreaMessage, artifact: OpenCodeArtifactInput) => void;
+  // Opens an interactive block of the message in the side panel.
+  onOpenUIBlock?: (message: ChatAreaMessage, blockKey: string) => void;
   onCycleMessageBranch: (parentPublicID: string | null, direction: "previous" | "next") => void;
   onToggleStar?: () => void | Promise<void>;
   onRename?: (title: string) => void | Promise<void>;
@@ -265,6 +277,8 @@ function useStableEvent<Args extends unknown[], Return>(callback: (...args: Args
 
 const ChatMessageRow = React.memo(function ChatMessageRow({
   item,
+  uiBlockStateStore,
+  uiBlockStateConversationID,
   busy,
   readOnly,
   reaction,
@@ -286,6 +300,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCycleMessageBranch,
   onReactAssistantMessage,
   onOpenCodeArtifact,
+  onOpenUIBlock,
   markdownRender,
   autoExpandThinking,
   autoExpandToolCalls,
@@ -303,6 +318,8 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   screenshotMetaTimestamp,
 }: {
   item: ChatAreaMessage;
+  uiBlockStateStore?: ChatUIBlockStateStore;
+  uiBlockStateConversationID: string | null;
   busy: boolean;
   readOnly: boolean;
   reaction: AssistantReaction;
@@ -325,6 +342,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onCycleMessageBranch: (parentPublicID: string | null, direction: "previous" | "next") => void;
   onReactAssistantMessage: (publicID: string, reaction: AssistantReaction) => void;
   onOpenCodeArtifact?: (message: ChatAreaMessage, artifact: OpenCodeArtifactInput) => void;
+  onOpenUIBlock?: (message: ChatAreaMessage, blockKey: string) => void;
   markdownRender: boolean;
   autoExpandThinking: boolean;
   autoExpandToolCalls: boolean;
@@ -359,14 +377,17 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   });
   const isUser = item.role === "user";
   const isAssistant = item.role === "assistant";
+  // Read-only rows (screenshots of a shared view) keep block changes local.
+  const uiBlockStateBinding = useChatUIBlockStateBinding(uiBlockStateStore, item, uiBlockStateConversationID, !readOnly);
   const artifactActions = React.useMemo(
     () =>
       isAssistant && onOpenCodeArtifact
         ? {
             onOpenCodeArtifact: (artifact: OpenCodeArtifactInput) => onOpenCodeArtifact(item, artifact),
+            onOpenUIBlock: onOpenUIBlock ? (blockKey: string) => onOpenUIBlock(item, blockKey) : undefined,
           }
         : undefined,
-    [isAssistant, item, onOpenCodeArtifact],
+    [isAssistant, item, onOpenCodeArtifact, onOpenUIBlock],
   );
   const sourceSupportsVideoExtension = React.useMemo(
     () =>
@@ -382,9 +403,18 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   );
 
   const copyKey = item.publicID || item.key;
+  const uiBlockRegistry = useUIBlockRegistry();
+  // Interactive blocks are copied as readable text in their current state, not
+  // as block source: the copy is for pasting where blocks do not render.
   const onCopy = React.useCallback(async () => {
-    await copy(item.content, { key: copyKey });
-  }, [copy, copyKey, item.content]);
+    const text = isUser
+      ? item.content
+      : messageUIBlocksText(item.content, uiBlockRegistry, (blockKey) => {
+          const saved = uiBlockStateBinding ? uiBlockStateBinding.read(blockKey) : item.uiState?.[blockKey];
+          return isUIBlockState(saved) ? saved : undefined;
+        });
+    await copy(text, { key: copyKey });
+  }, [copy, copyKey, isUser, item.content, item.uiState, uiBlockRegistry, uiBlockStateBinding]);
 
   if (isUser) {
     return (
@@ -429,6 +459,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           sourceSupportsVideoExtension ? onExtendVideoAttachment : undefined
         }
         artifactActions={artifactActions}
+        uiBlockState={uiBlockStateBinding}
         markdownRender={markdownRender}
         autoExpandThinking={autoExpandThinking}
         autoExpandToolCalls={autoExpandToolCalls}
@@ -463,6 +494,8 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
 }, (previous, next) => (
   previous.busy === next.busy &&
   previous.readOnly === next.readOnly &&
+  previous.uiBlockStateStore === next.uiBlockStateStore &&
+  previous.uiBlockStateConversationID === next.uiBlockStateConversationID &&
   previous.reaction === next.reaction &&
   previous.markdownRender === next.markdownRender &&
   previous.autoExpandThinking === next.autoExpandThinking &&
@@ -488,6 +521,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   previous.onEditImageAttachment === next.onEditImageAttachment &&
   previous.onExtendVideoAttachment === next.onExtendVideoAttachment &&
   previous.onOpenCodeArtifact === next.onOpenCodeArtifact &&
+  previous.onOpenUIBlock === next.onOpenUIBlock &&
   areChatAreaMessagesRenderEqual(previous.item, next.item)
 ));
 
@@ -498,6 +532,7 @@ export function ChatArea({
   messages,
   messagesReadOnly = false,
   persistMessageFeedback = true,
+  uiBlockState,
   busy,
   messageContentRef,
   onScroll,
@@ -517,6 +552,7 @@ export function ChatArea({
   onEditImageAttachment,
   onExtendVideoAttachment,
   onOpenCodeArtifact,
+  onOpenUIBlock,
   onCycleMessageBranch,
   onToggleStar,
   onRename,
@@ -697,6 +733,8 @@ export function ChatArea({
                   const row = (
                     <ChatMessageRow
                       item={item}
+                      uiBlockStateStore={uiBlockState?.store}
+                      uiBlockStateConversationID={uiBlockState?.conversationPublicID ?? null}
                       busy={busy}
                       readOnly={messagesReadOnly}
                       reaction={getReaction(item)}
@@ -718,6 +756,7 @@ export function ChatArea({
                       onCycleMessageBranch={stableOnCycleMessageBranch}
                       onReactAssistantMessage={stableOnReactAssistantMessage}
                       onOpenCodeArtifact={onOpenCodeArtifact}
+                      onOpenUIBlock={onOpenUIBlock}
                       markdownRender={markdownRender}
                       autoExpandThinking={autoExpandThinking}
                       autoExpandToolCalls={autoExpandToolCalls}

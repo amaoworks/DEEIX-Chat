@@ -54,7 +54,8 @@ import type {
 import type { ChatAreaMessage } from "@/features/chat/types/messages";
 import {
   resolveErrorDetails,
-  resolveErrorMessage,
+  resolveGenerationErrorId,
+  resolveErrorReason,
   resolveErrorSummary,
 } from "@/features/chat/utils/chat-runtime";
 import { getConversation } from "@/shared/api/conversation";
@@ -62,6 +63,7 @@ import type {
   ConversationDTO,
   ConversationOptions,
   MessageDTO,
+  MessageUIStateInput,
   SendMessageResult,
   StreamMessageEvent,
 } from "@/shared/api/conversation-types";
@@ -123,6 +125,7 @@ export function useChatMessageSubmit({
   onConversationRunFinished,
   onConversationRunStarted,
   resumeGenerationActive = false,
+  collectUIStates,
 }: {
   conversationID: string | null;
   conversationScopeKey: string;
@@ -176,6 +179,8 @@ export function useChatMessageSubmit({
   onConversationRunFinished?: (runID: string) => void;
   onConversationRunStarted?: (runID: string, conversationPublicID: string) => void;
   resumeGenerationActive?: boolean;
+  // Interactive component state on the branch being continued, attached to chat turns.
+  collectUIStates?: (messages: readonly ChatAreaMessage[]) => MessageUIStateInput[];
 }) {
   const t = useTranslations("chat.submit");
   const activeStreamsRef = React.useRef(new Map<string, ActiveStream>());
@@ -341,6 +346,10 @@ export function useChatMessageSubmit({
         return false;
       }
       const { plan } = planResult;
+      // Snapshot before the optimistic exchange joins the branch: the server keeps
+      // only blocks on the new message's own ancestor chain, so retries and edits
+      // can send the whole visible branch.
+      const turnUIStates = plan.submitTask === "chat" ? collectUIStates?.(visibleMessagesRef.current) : undefined;
       const {
         payloadContent,
         platformModelName,
@@ -550,6 +559,7 @@ export function useChatMessageSubmit({
           selectedSkills: plan.selectedSkills,
           selectedKnowledgeBaseIDs: plan.selectedKnowledgeBaseIDs,
           uiComponentIDs: plan.uiComponentIDs,
+          uiStates: turnUIStates,
           htmlVisualPromptEnabled: plan.htmlVisualPromptEnabled,
           parentMessagePublicID: resolvedParentPublicID,
           sourceMessagePublicID: plan.resolvedSourcePublicID,
@@ -687,7 +697,7 @@ export function useChatMessageSubmit({
           }
           return false;
         }
-        const errorMessage = resolveErrorMessage(error, t("retryLater"));
+        const errorMessage = resolveErrorReason(error, t("retryLater"));
         const errorDetails = resolveErrorDetails(error);
         const errorSummary = resolveErrorSummary(error, t("retryLater"));
         shouldKeepConversationLayout = true;
@@ -712,6 +722,7 @@ export function useChatMessageSubmit({
             clientRunID,
             title: t("generationInterrupted"),
             errorMessage,
+            errorId: resolveGenerationErrorId(error),
             errorDetails,
           }),
         );
@@ -771,6 +782,7 @@ export function useChatMessageSubmit({
     [
       activeGenerationRunsRef,
       autoGenerateLabels,
+      collectUIStates,
       combinedMessages,
       flushStreamTextNow,
       flushUpstreamThinkNow,
@@ -943,6 +955,32 @@ export function useChatMessageSubmit({
     });
   }, [attachments, currentLeafMessage?.publicID, draft, enqueueSubmission, resumeGenerationActive, sending, submitMessage, visibleMessages]);
 
+  // Sends text that did not come from the composer (an interactive block's
+  // `ask` button) as the next turn of the visible branch. The draft and its
+  // attachments stay as they are. Nothing is queued: while a reply is still
+  // running the button is disabled, and a stale click is ignored.
+  const onSendText = React.useCallback(
+    async (text: string) => {
+      const content = text.trim();
+      if (!content || sending || resumeGenerationActive) {
+        return false;
+      }
+      const parentMessagePublicID =
+        resolvePersistedPublicID(currentLeafMessage?.publicID) ??
+        resolveDefaultSubmissionParentMessage(visibleMessages)?.publicID ??
+        null;
+      await submitMessage({
+        content,
+        currentAttachments: [],
+        resetComposer: false,
+        parentMessagePublicID,
+        branchReason: "default",
+      });
+      return true;
+    },
+    [currentLeafMessage?.publicID, resumeGenerationActive, sending, submitMessage, visibleMessages],
+  );
+
   useChatQueueDispatch({
     queuedSubmissions,
     setQueuedSubmissions,
@@ -994,6 +1032,7 @@ export function useChatMessageSubmit({
     onRetryAssistantMessage,
     onRetryUserMessage,
     onSendMessage,
+    onSendText,
     onStopMessage,
     onDeleteQueuedMessage,
     onEditQueuedMessage,

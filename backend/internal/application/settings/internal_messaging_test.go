@@ -14,7 +14,7 @@ func TestInternalMessagingSeedPreservesConfiguredAndStoredEnabled(t *testing.T) 
 		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
 			ctx := context.Background()
 			repo := newSettingsSeedRepo()
-			service := NewService(repo, "")
+			service := NewService(repo, nil)
 			if err := service.Seed(ctx, config.Config{InternalMessagingEnabled: enabled}); err != nil {
 				t.Fatal(err)
 			}
@@ -34,7 +34,7 @@ func TestInternalMessagingSeedPreservesConfiguredAndStoredEnabled(t *testing.T) 
 func TestInternalMessagingSettingsUpdateAndApply(t *testing.T) {
 	ctx := context.Background()
 	repo := newSettingsSeedRepo()
-	service := NewService(repo, "")
+	service := NewService(repo, nil)
 	if err := service.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestInternalMessagingSettingsUpdateAndApply(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := config.NewRuntime(config.Config{InternalMessagingWebNotify: true})
-	if err := NewRuntimeSettings(repo, nil, "").ApplyTo(ctx, runtime); err != nil {
+	if err := NewRuntimeSettings(repo, nil, nil).ApplyTo(ctx, runtime); err != nil {
 		t.Fatal(err)
 	}
 	got := runtime.Snapshot()
@@ -78,7 +78,7 @@ func TestInternalMessagingSettingsUpdateAndApply(t *testing.T) {
 func TestInternalMessagingSeedKeepsExistingPolicy(t *testing.T) {
 	item := domainsettings.SystemSetting{Namespace: "internal_messaging", Key: "max_file_bytes", Value: "5242880", ValueType: "int"}
 	repo := newSettingsSeedRepo(item)
-	if err := NewService(repo, "").Seed(context.Background()); err != nil {
+	if err := NewService(repo, nil).Seed(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := repo.items["internal_messaging:max_file_bytes"].Value; got != item.Value {

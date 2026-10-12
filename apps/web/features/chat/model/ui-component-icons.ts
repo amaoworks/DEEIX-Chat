@@ -7,6 +7,8 @@ import {
   type LucideIcon,
   Network,
   Sheet,
+  SlidersHorizontal,
+  Sparkles,
   SquareChartGantt,
   SquareFunction,
   WalletCards,
@@ -14,6 +16,7 @@ import {
 
 // Icon per builtin component name; custom components fall back to LayoutGrid.
 // stat-grid wants PlayingCardsFan, which lands in a newer lucide release.
+// widget shares Sparkles with the illustration's loading placeholder.
 const BUILTIN_ICONS: Record<string, LucideIcon> = {
   "card-grid": LayoutGrid,
   chart: ChartPie,
@@ -25,6 +28,8 @@ const BUILTIN_ICONS: Record<string, LucideIcon> = {
   "decision-tree": Network,
   diff: FileDiff,
   quiz: FileQuestionMark,
+  panel: SlidersHorizontal,
+  widget: Sparkles,
 };
 
 export function uiComponentIcon(name: string): LucideIcon {

@@ -1,8 +1,10 @@
-// DEEIX Chat desktop shell: window/tray lifecycle, OAuth loopback, updater and
-// session storage. No business logic — everything else is the apps/web build.
+// DEEIX Chat desktop shell: window/tray/menu lifecycle, OAuth loopback, updater
+// and session storage. No business logic — everything else is the apps/web build.
 
 mod dialog;
 mod distribution;
+#[cfg(target_os = "macos")]
+mod menu;
 mod oauth_loopback;
 mod paths;
 mod policy;
@@ -24,7 +26,7 @@ pub fn run() {
     let distribution = distribution::bootstrap(&mut context);
     let portable = distribution.portable.clone();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             tray::show_main_window(app);
         }))
@@ -57,7 +59,15 @@ pub fn run() {
             tabs::tabs_activate,
             tabs::tabs_close,
             tabs::tabs_move,
-        ])
+        ]);
+
+    // macOS only: replaces Tauri's default menu, whose ⌘W hides the whole tab container.
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
+
+    builder
         .setup(move |app| {
             // Plugins are set up first, so a second instance has already
             // handed over and exited by now.

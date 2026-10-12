@@ -32,6 +32,7 @@ import type {
   MessageDeleteDTO,
   MessageDTO,
   MessageFeedbackResult,
+  MessageUIStateResult,
   MessageProcessTraceDTO,
   PromptTraceBlockDTO,
   PromptTraceDTO,
@@ -47,6 +48,7 @@ import type {
   SetConversationProjectRequest,
   SetConversationStarRequest,
   SetMessageFeedbackRequest,
+  SetMessageUIStateRequest,
   StreamMessageEvent,
   TemporaryChatMessageRequest,
   TraceBlockDTO,
@@ -204,6 +206,7 @@ type UnrecognizedStreamEvent = {
   message?: string;
   status?: number;
   errorCode?: string;
+  requestId?: string;
   debug?: unknown;
 };
 
@@ -221,6 +224,7 @@ function normalizeStreamEvent(rawEvent: unknown): ParsedStreamEvent {
       message: readString(rawEvent, "message"),
       status: readFiniteNumber(rawEvent, "status"),
       errorCode: readString(rawEvent, "errorCode"),
+      requestId: readString(rawEvent, "requestId"),
       debug: rawEvent.debug,
     };
   }
@@ -398,7 +402,13 @@ function handleStreamEvent(event: ParsedStreamEvent, options: ConversationStream
     }
   }
 
-  throw new ApiError(event.message || "stream failed", event.status ?? responseStatus, event.debug, event.errorCode);
+  throw new ApiError(
+    event.message || "stream failed",
+    event.status ?? responseStatus,
+    event.debug,
+    event.errorCode,
+    event.requestId,
+  );
 }
 
 type ListConversationsOptions = {
@@ -1225,6 +1235,27 @@ export async function deleteConversationMessage(
     {
       method: "DELETE",
       accessToken,
+    },
+    true,
+  );
+}
+
+// Saves the interactive component state of one assistant message. Blocks in the
+// map replace their stored state, `null` clears one, absent blocks are untouched.
+export async function setMessageUIState(
+  accessToken: string,
+  conversationPublicID: string,
+  messagePublicID: string,
+  payload: SetMessageUIStateRequest,
+  { keepalive = false }: { keepalive?: boolean } = {},
+): Promise<MessageUIStateResult> {
+  return authedRequest<MessageUIStateResult>(
+    `/api/v1/conversations/${pathParam(conversationPublicID)}/messages/${pathParam(messagePublicID)}/ui-state`,
+    {
+      method: "PUT",
+      accessToken,
+      body: payload,
+      keepalive,
     },
     true,
   );

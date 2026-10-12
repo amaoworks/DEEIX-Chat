@@ -20,11 +20,13 @@ export const ADMIN_SECTIONS = [
   { id: "files", label: "Files & retrieval", href: "/files" },
   { id: "internal-messaging", label: "Internal messaging", href: "/internal-messaging", feature: "multiUser" },
   { id: "knowledge-bases", label: "Knowledge bases", href: "/knowledge-bases" },
+  // Users' own API keys: there is no other account to own one in single-user (local) mode.
+  { id: "user-keys", label: "User model providers", href: "/user-keys", feature: "multiUser" },
   { id: "about", label: "About", href: "/about" },
 ] as const satisfies readonly { id: string; label: string; href: string; feature?: Feature }[];
 
 export type AdminSection = (typeof ADMIN_SECTIONS)[number]["id"];
-export type AdminSectionEntry = (typeof ADMIN_SECTIONS)[number];
+type AdminSectionEntry = (typeof ADMIN_SECTIONS)[number];
 
 export const DEFAULT_ADMIN_SECTION: AdminSection = "statistics";
 
@@ -37,8 +39,4 @@ export function resolveAdminSectionFromPath(pathname: string, basePath: string):
       return pathname === href || pathname.startsWith(`${href}/`);
     }) ?? null
   );
-}
-
-export function resolveAdminSection(section?: string | null): AdminSection {
-  return ADMIN_SECTIONS.find((item) => item.id === section)?.id ?? DEFAULT_ADMIN_SECTION;
 }

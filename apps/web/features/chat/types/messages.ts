@@ -1,4 +1,5 @@
 import type { UpstreamDebugInfo } from "@/shared/api/conversation-types";
+import type { UIBlockState } from "@/shared/components/markdown/ui-blocks/ui-block-state";
 import type { ReasoningEffortLevel } from "@/entities/model";
 
 export type MessageAttachment = {
@@ -116,6 +117,8 @@ export type ChatMessageProcessTrace = {
 export type ChatInlineAlert = {
   title: string;
   message: string;
+  // errorId is the server request ID of this failure; administrators look up the backend log with it.
+  errorId?: string;
   details?: UpstreamDebugInfo;
 };
 
@@ -158,6 +161,9 @@ export type ChatAreaMessage = {
   activityLabel?: string;
   imageAspectRatio?: ImageLoadingAspectRatio;
   myFeedback?: "up" | "down" | null;
+  // Persisted per-block state of the interactive components in this message,
+  // only the keys the user changed; absent when nothing was changed.
+  uiState?: UIBlockState;
   thumbsUpCount?: number;
   thumbsDownCount?: number;
   branchNavigator?: ChatMessageBranchNavigator;

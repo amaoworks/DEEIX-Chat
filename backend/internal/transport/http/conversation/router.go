@@ -43,6 +43,7 @@ func (m *Module) RegisterRoutes(authRequired *gin.RouterGroup, gate middleware.F
 	authRequired.POST("/temporary-chat/messages/stream", m.Handler.StreamTemporaryChatMessage)
 	authRequired.POST("/conversations/:id/messages/:message_id/fork", m.Handler.ForkConversationFromMessage)
 	authRequired.DELETE("/conversations/:id/messages/:message_id", m.Handler.DeleteMessage)
+	authRequired.PUT("/conversations/:id/messages/:message_id/ui-state", m.Handler.SetMessageUIState)
 	authRequired.POST("/conversations/:id/media/images/generations/stream", m.Handler.StreamImageGeneration)
 	authRequired.POST("/conversations/:id/media/images/edits/stream", m.Handler.StreamImageEdit)
 	authRequired.POST("/conversations/:id/media/videos/generations/stream", m.Handler.StreamVideoGeneration)

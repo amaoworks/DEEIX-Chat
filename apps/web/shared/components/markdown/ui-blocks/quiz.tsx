@@ -10,8 +10,10 @@ import { cn } from "@/lib/utils";
 import { CollapsibleMotionContent } from "@/shared/components/collapsible-motion-content";
 import { SlideSwitch } from "@/shared/components/slide-switch";
 import type { UIBlockDefinition, UIBlockRenderProps, UIBlockSkeletonProps } from "./block";
+import { joinTextBlocks, textTitle } from "./block-text";
 import { s } from "./schema";
 import { UIBlockFrame } from "./ui-block-frame";
+import { type UIBlockState, useUIBlockState } from "./ui-block-state";
 
 // Options are plain strings or objects that can route to another question.
 type QuizOption = string | { text: string; next?: string; explanation?: string };
@@ -55,27 +57,62 @@ function questionID(question: QuizQuestion, index: number): string {
   return question.id ?? `q${index + 1}`;
 }
 
+// Stored state: the picked option per question (null = unanswered), plus, for
+// branching quizzes, the visited questions and whether the end was reached. The
+// score is derived, never stored.
+type QuizState = { answers: (number | null)[]; path: number[]; ended: boolean };
+
+const MAX_PATH = 64;
+
+function quizDefaults(questions: QuizQuestion[]): QuizState {
+  return { answers: questions.map(() => null), path: [0], ended: false };
+}
+
+function restoreQuizState(questions: QuizQuestion[], saved: UIBlockState | undefined, defaults: QuizState): QuizState {
+  const storedAnswers = saved?.answers;
+  const answers = questions.map((question, index) => {
+    const stored = Array.isArray(storedAnswers) ? storedAnswers[index] : undefined;
+    return typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored < question.options.length ? stored : null;
+  });
+  const storedPath = saved?.path;
+  const path =
+    Array.isArray(storedPath) &&
+    storedPath.length > 0 &&
+    storedPath.length <= MAX_PATH &&
+    storedPath[0] === 0 &&
+    storedPath.every((step) => typeof step === "number" && Number.isInteger(step) && step >= 0 && step < questions.length)
+      ? storedPath.filter((step): step is number => typeof step === "number")
+      : defaults.path;
+  return { answers, path, ended: saved?.ended === true };
+}
+
+function withAnswer(answers: (number | null)[], index: number, value: number | null): (number | null)[] {
+  return answers.map((answer, current) => (current === index ? value : answer));
+}
+
 function Quiz({ id, props }: UIBlockRenderProps<QuizProps>) {
   const t = useTranslations("chat.markdown.uiBlock");
   const questions = props.questions;
   const branching = React.useMemo(() => isBranching(questions), [questions]);
   const indexByID = React.useMemo(() => new Map(questions.map((question, index) => [questionID(question, index), index])), [questions]);
-  // Visited questions in order (branching) — the last entry is the current one.
-  const [path, setPath] = React.useState<number[]>([0]);
-  const [picked, setPicked] = React.useState<Record<number, number>>({});
+  const defaults = React.useMemo(() => quizDefaults(questions), [questions]);
+  // `path` lists visited questions in order (branching) — the last entry is the current one.
+  const [{ answers, path, ended }, setState] = useUIBlockState<QuizState>(id, {
+    defaults,
+    restore: (saved, initial) => restoreQuizState(questions, saved, initial),
+    title: props.title,
+  });
   const [direction, setDirection] = React.useState<1 | -1>(1);
-  const [ended, setEnded] = React.useState(false);
+  const pickedOf = (qIndex: number): number | undefined => answers[qIndex] ?? undefined;
 
   const scored = questions.filter((question) => question.answer !== undefined);
   const visibleScored = branching ? scored.filter((question) => path.includes(questions.indexOf(question))) : scored;
-  const correct = visibleScored.reduce((count, question) => count + (picked[questions.indexOf(question)] === question.answer ? 1 : 0), 0);
-  const answered = Object.keys(picked).length;
+  const correct = visibleScored.reduce((count, question) => count + (pickedOf(questions.indexOf(question)) === question.answer ? 1 : 0), 0);
+  const answered = answers.filter((answer) => answer !== null).length;
   const finished = branching ? ended : answered === questions.length;
 
   const reset = () => {
-    setPicked({});
-    setPath([0]);
-    setEnded(false);
+    setState(null);
     setDirection(-1);
   };
 
@@ -94,46 +131,42 @@ function Quiz({ id, props }: UIBlockRenderProps<QuizProps>) {
   };
 
   const choose = (qIndex: number, oIndex: number) => {
-    setPicked((current) => ({ ...current, [qIndex]: oIndex }));
+    setState((current) => ({ ...current, answers: withAnswer(current.answers, qIndex, oIndex) }));
   };
   const advance = () => {
     const qIndex = path[path.length - 1];
     const question = questions[qIndex];
-    const option = question.options[picked[qIndex] ?? 0];
+    const option = question.options[pickedOf(qIndex) ?? 0];
     const next = resolveNext(question, qIndex, option);
     setDirection(1);
     if (next === END) {
-      setEnded(true);
-    } else {
-      // Stepping into a question again (loops) clears its previous pick.
-      setPicked((current) => {
-        const { [next]: _dropped, ...rest } = current;
-        return rest;
-      });
-      setPath((current) => [...current, next]);
+      setState({ ended: true });
+      return;
     }
+    // Stepping into a question again (loops) clears its previous pick.
+    setState((current) =>
+      current.path.length >= MAX_PATH
+        ? current
+        : { ...current, answers: withAnswer(current.answers, next, null), path: [...current.path, next] },
+    );
   };
   const back = () => {
     setDirection(-1);
     if (ended) {
-      setEnded(false);
+      setState({ ended: false });
       return;
     }
-    setPath((current) => {
-      if (current.length <= 1) {
+    setState((current) => {
+      if (current.path.length <= 1) {
         return current;
       }
-      const dropped = current[current.length - 1];
-      setPicked((picks) => {
-        const { [dropped]: _removed, ...rest } = picks;
-        return rest;
-      });
-      return current.slice(0, -1);
+      const dropped = current.path[current.path.length - 1];
+      return { ...current, answers: withAnswer(current.answers, dropped, null), path: current.path.slice(0, -1) };
     });
   };
 
   const renderQuestion = (question: QuizQuestion, qIndex: number, ordinal: number) => {
-    const chosen = picked[qIndex];
+    const chosen = pickedOf(qIndex);
     const revealed = chosen !== undefined;
     const graded = question.answer !== undefined;
     const answerIndex = question.answer !== undefined ? Math.min(Math.max(0, Math.trunc(question.answer)), question.options.length - 1) : -1;
@@ -223,7 +256,7 @@ function Quiz({ id, props }: UIBlockRenderProps<QuizProps>) {
                 <button
                   type="button"
                   onClick={advance}
-                  disabled={picked[path[path.length - 1]] === undefined}
+                  disabled={pickedOf(path[path.length - 1]) === undefined}
                   className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 font-medium text-primary-foreground transition-opacity disabled:opacity-40"
                 >
                   {t("quizNext")}
@@ -267,6 +300,31 @@ function QuizSkeleton({ items = 0 }: UIBlockSkeletonProps) {
 
 const OPTION_SCHEMA = s.object({ text: s.string(), next: s.string(), explanation: s.string() }, ["text"]);
 
+// Questions the user reached, their picks checked, and the right option marked
+// once a question is answered (as on screen after answering).
+function quizText(props: QuizProps, state: UIBlockState | undefined): string {
+  const questions = props.questions;
+  const { answers, path } = restoreQuizState(questions, state, quizDefaults(questions));
+  const shown = isBranching(questions) ? path : questions.map((_, index) => index);
+  const lines: string[] = [];
+  shown.forEach((questionIndex, position) => {
+    const question = questions[questionIndex];
+    if (!question) {
+      return;
+    }
+    const picked = answers[questionIndex] ?? null;
+    lines.push(`${position + 1}. ${question.question}`);
+    question.options.forEach((option, optionIndex) => {
+      const correct = picked !== null && question.answer === optionIndex ? " ✓" : "";
+      lines.push(`   - [${picked === optionIndex ? "x" : " "}] ${optionText(option)}${correct}`);
+    });
+    if (picked !== null && question.explanation?.trim()) {
+      lines.push(`   ${question.explanation.trim()}`);
+    }
+  });
+  return joinTextBlocks([...textTitle(props.title), lines.join("\n")]);
+}
+
 export const quizDefinition: UIBlockDefinition<QuizProps> = {
   name: "quiz",
   version: 1,
@@ -292,4 +350,5 @@ export const quizDefinition: UIBlockDefinition<QuizProps> = {
   ),
   Component: Quiz,
   Skeleton: QuizSkeleton,
+  toText: quizText,
 };

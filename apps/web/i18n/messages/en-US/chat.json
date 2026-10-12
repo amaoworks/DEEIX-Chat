@@ -154,6 +154,7 @@
       "itemCount": "{count} items",
       "unknownComponent": "Unsupported component {component}",
       "invalidProps": "Component {component} data is incomplete; showing the raw content",
+      "renderFailed": "Component {component} failed to render; showing the raw content",
       "reset": "Reset",
       "back": "Back",
       "missingNode": "Node {id} not found",
@@ -193,7 +194,30 @@
       "diffPrevChange": "Previous change",
       "diffNextChange": "Next change",
       "diffCopyAfter": "Copy result",
-      "quizNext": "Next"
+      "quizNext": "Next",
+      "askHint": "Send this follow-up (Enter to send, Shift+Enter for a new line)",
+      "askBusy": "Available when the current reply finishes",
+      "askUnavailable": "Messages can't be sent here",
+      "copy": "Copy",
+      "copied": "Copied",
+      "copyFailed": "Copy failed",
+      "formulaIssues": "{count, plural, one {# formula or data issue} other {# formula or data issues}}",
+      "prefilled": "Added to the message box; review it and send",
+      "prefillSkipped": "The message box already has text, so the component's text was not added",
+      "openInPanel": "Open in side panel",
+      "panelTitle": "Interactive block",
+      "closePanel": "Close side panel",
+      "widgetGenerating": "Drawing the illustration…",
+      "widgetGeneratingTitled": "Drawing “{title}”…",
+      "widgetTitle": "Interactive illustration",
+      "widgetUnavailable": "Illustrations can't run here; showing the source",
+      "widgetTooLarge": "This illustration is too large to run; showing the source",
+      "viewSource": "View source",
+      "hideSource": "Hide source",
+      "askLabel": "Follow-up question",
+      "askPlaceholder": "Type a follow-up question",
+      "askSend": "Send follow-up",
+      "askRestore": "Restore the suggested question"
     },
     "copyLatex": "Copy formula source",
     "latexCopied": "Formula source copied",
@@ -233,7 +257,10 @@
       "exitFullscreen": "Exit",
       "zoomIn": "Zoom in",
       "zoomOut": "Zoom out",
-      "resetView": "Reset view"
+      "resetView": "Reset view",
+      "rendering": "Rendering diagram…",
+      "renderFailed": "Couldn't render this diagram",
+      "viewSource": "View source"
     }
   },
   "artifacts": {
@@ -254,11 +281,20 @@
     "close": "Close",
     "resize": "Resize Artifact",
     "empty": "This artifact is empty and cannot be previewed yet.",
+    "generating": "Generating… the preview appears once the code is complete.",
     "security": "The preview runs in an isolated sandbox with external network, forms, popups, parent page access, and storage access restricted."
   },
   "messages": {
     "debugRequest": "Request",
     "debugResponse": "Response",
+    "debugFormatted": "Formatted",
+    "debugRaw": "Raw",
+    "debugViewMode": "View mode",
+    "debugSide": "Request or response",
+    "debugCopy": "Copy content",
+    "debugCopied": "Copied",
+    "debugCopyFailed": "Copy failed",
+    "debugEmpty": "Empty",
     "copied": "Message copied",
     "copyFailed": "Copy failed",
     "copyFailedDescription": "Please try again later.",
@@ -511,6 +547,11 @@
     "defaultModelUnavailable": "The current model is unavailable. Select another model.",
     "sessionExpired": "Your session has expired. Please sign in again.",
     "retryLater": "Please try again later.",
+    "errorId": "Error ID",
+    "errorIdHint": "Include this ID when reporting the problem so an administrator can look up the cause.",
+    "copyErrorId": "Copy error ID",
+    "errorIdCopied": "Error ID copied",
+    "errorIdCopyFailed": "Copy failed",
     "streamResponseParseFailed": "The upstream returned HTTP {statusCode}, but the stream format is incompatible with the selected protocol.",
     "jsonMustBeObject": "JSON must be an object",
     "currentModel": "Current model",
@@ -624,20 +665,18 @@
       }
     },
     "mediaMode": {
-      "imageGeneration": "Image generation",
-      "imageGenerationIntro": "Image generation mode is active.",
-      "imageGenerationDescription": "Creates a new image from the text prompt. Upload an image to switch to image editing.",
-      "imageEdit": "Image editing",
-      "imageEditIntro": "Image editing mode is active.",
-      "imageEditDescription": "Edits the uploaded image using the text prompt.",
-      "videoGeneration": "Video generation",
-      "videoGenerationIntro": "Video generation mode is active.",
-      "videoGenerationDescription": "Creates a video from the text prompt. Upload one image to use it as a reference input.",
-      "videoExtension": "Video extension",
-      "videoExtensionIntro": "Video extension mode is active.",
-      "videoExtensionDescription": "Extends the uploaded MP4 video from your prompt. Only the extension duration is configurable.",
-      "invalidFile": "Invalid file detected",
-      "invalidFileIntro": "This file cannot be used for a media task.",
+      "placeholders": {
+        "image_generation": "Describe the image to generate",
+        "image_edit": "Describe how to change this image",
+        "video_generation": "Describe the video to generate",
+        "video_extension": "Describe what happens next in the video"
+      },
+      "parameters": {
+        "image_generation": "Image generation parameters",
+        "image_edit": "Image editing parameters",
+        "video_generation": "Video generation parameters",
+        "video_extension": "Video extension parameters"
+      },
       "blockedDescriptions": {
         "image_edit_input_required": "Upload an image to edit first.",
         "image_edit_unsupported": "The selected model does not support image editing. Remove the image or switch models.",
@@ -675,13 +714,15 @@
     },
     "viewPricing": "View pricing",
     "freeBadge": "Free",
+    "personalBadge": "BYOK",
     "detail": {
       "modalities": "Modalities",
       "context": "Context",
       "price": "Price",
       "perMillion": "per 1M tokens",
       "schedule": "Time-of-day rates",
-      "unknown": "Unknown"
+      "unknown": "Unknown",
+      "chargedByProvider": "Charged by provider"
     },
     "freeModel": "Free model",
     "freeModelDescription": "No usage balance will be deducted",
@@ -1136,6 +1177,7 @@
     "numberInvalid": "Enter a valid number",
     "numberInvalidRange": "Enter a valid number between {min} and {max}",
     "increase": "Increase",
-    "decrease": "Decrease"
+    "decrease": "Decrease",
+    "empty": "This model has no adjustable parameters."
   }
 }

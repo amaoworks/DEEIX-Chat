@@ -956,6 +956,12 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 				},
 			},
 			{
+				label: "chat_message_ui_states",
+				run: func(db *gorm.DB) error {
+					return db.Where("user_id = ?", userID).Delete(&models.ConversationMessageUIState{}).Error
+				},
+			},
+			{
 				label: "chat_feedback",
 				run: func(db *gorm.DB) error {
 					return db.Unscoped().Where("user_id = ?", userID).Delete(&models.ConversationMessageFeedback{}).Error
@@ -1003,6 +1009,13 @@ func (r *Repo) DeleteAccountHard(ctx context.Context, userID uint) error {
 				label: "skills",
 				run: func(db *gorm.DB) error {
 					return db.Where("scope = ? AND owner_user_id = ?", domainskill.ScopeUser, userID).Delete(&models.Skill{}).Error
+				},
+			},
+			{
+				// 用户自带 Key 的模型服务含加密 Key，必须随账号一并删除。
+				label: "llm_user_providers",
+				run: func(db *gorm.DB) error {
+					return db.Where("owner_user_id = ?", userID).Delete(&models.LLMUserProvider{}).Error
 				},
 			},
 			{

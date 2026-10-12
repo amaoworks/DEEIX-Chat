@@ -1,6 +1,6 @@
 {
   "name": "@deeix/chat-monorepo",
-  "version": "0.4.4-beta.5",
+  "version": "0.4.4",
   "private": true,
   "packageManager": "pnpm@10.17.0",
   "scripts": {
@@ -23,7 +23,8 @@
     "overrides": {
       "dompurify": "3.4.16",
       "fast-uri": ">=3.1.6",
-      "js-yaml": ">=4.3.2"
+      "js-yaml": ">=4.3.2",
+      "katex": "^0.18.11"
     }
   }
 }

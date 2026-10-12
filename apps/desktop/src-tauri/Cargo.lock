@@ -804,9 +804,10 @@ dependencies = [
 
 [[package]]
 name = "deeix-chat-desktop"
-version = "0.4.4-beta.5"
+version = "0.4.4"
 dependencies = [
  "dunce",
+ "gtk",
  "keyring",
  "objc2",
  "objc2-foundation",

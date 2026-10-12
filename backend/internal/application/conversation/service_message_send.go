@@ -56,6 +56,12 @@ func (s *Service) reasoningContentPassbackEnabled(ctx context.Context, userID ui
 }
 
 func messageRouteConfig(route *channel.ResolvedRoute, attributionReferer string, attributionTitle string) llm.RouteConfig {
+	return routeConfigFromResolved(route, llm.DefaultEndpointForAdapter(route.Protocol), attributionReferer, attributionTitle)
+}
+
+// routeConfigFromResolved 是把解析后的路由转换为上游调用配置的唯一入口。
+// UntrustedEndpoint 必须原样传递：用户自带 Key 的端点只能走强制 SSRF 防护的客户端。
+func routeConfigFromResolved(route *channel.ResolvedRoute, endpoint string, attributionReferer string, attributionTitle string) llm.RouteConfig {
 	return llm.RouteConfig{
 		Protocol:            route.Protocol,
 		BaseURL:             route.BaseURL,
@@ -64,10 +70,11 @@ func messageRouteConfig(route *channel.ResolvedRoute, attributionReferer string,
 		ConnectTimeoutMS:    route.ConnectTimeoutMS,
 		ReadTimeoutMS:       route.ReadTimeoutMS,
 		StreamIdleTimeoutMS: route.StreamIdleTimeoutMS,
-		Endpoint:            llm.DefaultEndpointForAdapter(route.Protocol),
+		Endpoint:            endpoint,
 		UpstreamModel:       route.UpstreamModel,
 		AttributionReferer:  attributionReferer,
 		AttributionTitle:    attributionTitle,
+		UntrustedEndpoint:   route.UntrustedEndpoint,
 	}
 }
 
@@ -575,6 +582,8 @@ func (s *Service) sendMessageInternal(
 
 	contextAssembler := NewContextAssembler(0)
 	userCtx := userContextInput{ImageAnalyses: imageProcessing.Analyses}
+	// 组件状态只认本轮实际发送的历史：被压缩快照覆盖的消息已不在提示词里，其上的组件状态不再注入。
+	userCtx.UIStates = resolveBranchUIStates(cfg, promptMessages, input.UIStates)
 	var prefixMemories []domainmemory.UserMemory
 	preferencePrompt := ""
 	if promptScope.Snapshot != nil {
@@ -679,6 +688,7 @@ func (s *Service) sendMessageInternal(
 		ProjectSystemPrompt:     conversation.ProjectSystemPrompt,
 		HTMLVisualPromptEnabled: input.HTMLVisualPromptEnabled,
 		UIComponents:            uiComponents,
+		UIBlockVersion:          input.UIBlockVersion,
 		DomainMessages:          promptScope.activeMessages(),
 		ConversationFiles:       fileContextPlan.Attachments,
 		NativeInputs:            nativeInputCache,

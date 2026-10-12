@@ -71,6 +71,7 @@ apps/*  →  packages/core  →  packages/api-contract  →  backend/docs/swagge
 - **不做 I/O。** 不直接调用 `fetch`、`localStorage`、`SecureStore`、Tauri command。所有 I/O 通过接口注入，由宿主应用实现。
 - **可在 Node 里单测。** `pnpm --filter @deeix/core test` 使用 Node 内置 test runner，不需要浏览器或设备。
 - **按需增长。** 只在第二个客户端真的需要时才把逻辑从 `apps/web` 抽进来，不预建空目录。
+  - 例外：`ui-block`（交互式组件引擎：宽容 JSON 解析、表达式、模板与状态求值）目前只有 Web 使用，仍放在 core。它是纯逻辑，且与后端提示词共享契约（函数表、原语与示例须与 `backend/internal/application/uicomponent` 的提示词一致）；渲染（React 组件）留在 `apps/web/shared/components/markdown/ui-blocks`。
 
 ### UI 不共享，逻辑必须共享
 

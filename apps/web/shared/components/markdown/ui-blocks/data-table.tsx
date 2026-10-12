@@ -10,9 +10,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableEmptyRow, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { downloadBlob } from "@/shared/lib/export-download";
+import { isRecord } from "@/shared/lib/type-guards";
 import type { UIBlockDefinition, UIBlockRenderProps, UIBlockSkeletonProps } from "./block";
+import { joinTextBlocks, textTable, textTitle } from "./block-text";
 import { s } from "./schema";
 import { UIBlockFrame } from "./ui-block-frame";
+import { type UIBlockState, useUIBlockState } from "./ui-block-state";
 
 const COLUMN_TYPES = ["string", "number", "date", "boolean"] as const;
 type ColumnType = (typeof COLUMN_TYPES)[number];
@@ -26,6 +29,20 @@ export type DataTableProps = {
 };
 
 type Sort = { key: string; direction: "asc" | "desc" } | null;
+type DataTableState = { query: string; sort: Sort };
+
+const MAX_STORED_QUERY_LENGTH = 200;
+
+// A stored sort on a column the table no longer has is dropped.
+function restoreDataTableState(columns: DataTableProps["columns"], saved: UIBlockState | undefined, defaults: DataTableState): DataTableState {
+  const query = typeof saved?.query === "string" ? saved.query.slice(0, MAX_STORED_QUERY_LENGTH) : defaults.query;
+  const stored = saved?.sort;
+  if (!isRecord(stored) || typeof stored.key !== "string" || !columns.some((column) => column.key === stored.key)) {
+    return { query, sort: defaults.sort };
+  }
+  const direction = stored.direction === "asc" ? "asc" : stored.direction === "desc" ? "desc" : null;
+  return { query, sort: direction ? { key: stored.key, direction } : defaults.sort };
+}
 
 const NUMBER_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ]|$)/;
@@ -94,10 +111,15 @@ function csvEscape(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
+const DATA_TABLE_DEFAULTS: DataTableState = { query: "", sort: null };
+
 function DataTable({ id, props }: UIBlockRenderProps<DataTableProps>) {
   const t = useTranslations("chat.markdown.uiBlock");
-  const [query, setQuery] = React.useState("");
-  const [sort, setSort] = React.useState<Sort>(null);
+  const [{ query, sort }, setState] = useUIBlockState<DataTableState>(id, {
+    defaults: DATA_TABLE_DEFAULTS,
+    restore: (saved, defaults) => restoreDataTableState(props.columns, saved, defaults),
+    title: props.title,
+  });
   const [page, setPage] = React.useState(1);
   const pageSize = Math.max(5, Math.min(100, props.pageSize ?? 10));
   const types = React.useMemo(() => {
@@ -127,7 +149,10 @@ function DataTable({ id, props }: UIBlockRenderProps<DataTableProps>) {
   const visible = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const toggleSort = (key: string) =>
-    setSort((current) => (!current || current.key !== key ? { key, direction: "asc" } : current.direction === "asc" ? { key, direction: "desc" } : null));
+    setState((current) => ({
+      ...current,
+      sort: !current.sort || current.sort.key !== key ? { key, direction: "asc" } : current.sort.direction === "asc" ? { key, direction: "desc" } : null,
+    }));
 
   const exportCSV = () => {
     const header = props.columns.map((column) => csvEscape(column.label)).join(",");
@@ -150,7 +175,7 @@ function DataTable({ id, props }: UIBlockRenderProps<DataTableProps>) {
             <Input
               value={query}
               onChange={(event) => {
-                setQuery(event.target.value);
+                setState({ query: event.target.value.slice(0, MAX_STORED_QUERY_LENGTH) });
                 setPage(1);
               }}
               placeholder={t("search")}
@@ -266,6 +291,13 @@ function DataTableSkeleton({ items = 0 }: UIBlockSkeletonProps) {
   );
 }
 
+// Every row, not just the visible page: a copy is for reading elsewhere.
+function dataTableText(props: DataTableProps): string {
+  const types = props.columns.map((column) => column.type ?? inferType(props.rows.find((row) => row[column.key] !== undefined)?.[column.key]));
+  const rows = props.rows.map((row) => props.columns.map((column, index) => formatCell(row[column.key], types[index] ?? "string")));
+  return joinTextBlocks([...textTitle(props.title), textTable(props.columns.map((column) => column.label), rows).join("\n")]);
+}
+
 export const dataTableDefinition: UIBlockDefinition<DataTableProps> = {
   name: "data-table",
   version: 1,
@@ -280,4 +312,5 @@ export const dataTableDefinition: UIBlockDefinition<DataTableProps> = {
   ),
   Component: DataTable,
   Skeleton: DataTableSkeleton,
+  toText: dataTableText,
 };

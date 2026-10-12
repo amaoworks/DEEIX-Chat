@@ -6,6 +6,52 @@ import "time"
 // FenceLanguage 是模型输出组件时使用的 Markdown 围栏语言标识。
 const FenceLanguage = "deeix-ui"
 
+// WidgetFenceLanguage 是内联交互图解的围栏语言标识：内容是模型写的 HTML 与脚本，客户端在沙箱 iframe 中运行
+// （无同源、无网络）；只对可交互格式的客户端开放。
+const WidgetFenceLanguage = "deeix-widget"
+
+// 块格式版本由客户端随请求声明，表示它能渲染哪一版 deeix-ui 内容；与单个组件的 Version 无关。
+const (
+	// BlockFormatStatic 只有 component、id 与组件属性，所有客户端都能渲染。
+	BlockFormatStatic = 1
+	// BlockFormatLive 增加 state、computed、children 与布局/控件原语（packages/core/src/ui-block）。
+	BlockFormatLive = 2
+)
+
+// Primitives 是可交互块里 panel 及其子节点可用的原语，与 packages/core/src/ui-block/primitives.ts 一致；
+// 自定义组件不能使用这些名字，否则嵌在 panel 里时无法区分。
+var Primitives = []string{
+	"panel", "row", "stack", "grid", "card", "tabs", "collapse",
+	"divider", "text", "stat", "badge", "progress", "callout", "formula", "scene",
+	"slider", "select", "segmented", "switch", "input", "button",
+}
+
+// SupersededByLive 是勾选了 panel 时目录不再列出的内置组件：panel 的状态与公式已覆盖其用途；
+// 旧消息里的这些块照常渲染。
+var SupersededByLive = []string{"calculator"}
+
+// 块格式能力以内置组件的形式出现在目录与选择器里，可以像组件一样勾选、由管理员停用；它们不进入 <catalog>，
+// 只决定可交互格式的目录是否说明 panel（<live>）与内联交互图解（<widget>）。
+const (
+	CapabilityPanel  = "panel"
+	CapabilityWidget = "widget"
+)
+
+// IsCapability 判断内置组件是不是块格式能力，而不是可以写进 deeix-ui 块的组件。
+func IsCapability(name string) bool {
+	return name == CapabilityPanel || name == CapabilityWidget
+}
+
+// IsPrimitive 判断名字是否被原语占用。
+func IsPrimitive(name string) bool {
+	for _, primitive := range Primitives {
+		if primitive == name {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	// ScopeBuiltin 表示仓库内置组件；启动时播种，受保护不可删除。
 	ScopeBuiltin = "builtin"
@@ -159,6 +205,23 @@ var builtinSpecs = []builtinSpec{
 		Interactions: "点选即时判对错并显示解析，统计得分；带 next 时逐题呈现、按选择跳题、可返回",
 		Rules:        "answer 是正确选项下标，省略则只分流不计分；选项写成 {text, next} 可跳到指定 id 的题，next: \"end\" 结束",
 		Props:        "{title?, questions: [{id?, question, options: (string | {text, next?, explanation?})[], answer?: number, explanation?, next?}]}",
+	},
+	// 以下两项是块格式能力（见 IsCapability），排在目录组件之后，与提示词「由轻到重」的顺序一致。
+	{
+		Name:         CapabilityPanel,
+		Version:      1,
+		What:         "可交互面板",
+		When:         "讲解公式与定律、估算与 what-if、需要几个部件联动的计算",
+		Interactions: "拖动滑块、切换选项，公式代入、数值、图表与示意图实时重算",
+		Props:        "{component: \"panel\", state, computed?, children: [原语或目录组件]}",
+	},
+	{
+		Name:         CapabilityWidget,
+		Version:      1,
+		What:         "内联交互图解",
+		When:         "动画、时间推进、三维或透视示意、流场、机构与工程过程演示",
+		Interactions: "播放暂停、调速、拖动进度、切换构型；在沙箱中运行，无网络",
+		Props:        "围栏语言 " + WidgetFenceLanguage + "，内容是自包含的 HTML 片段",
 	},
 }
 

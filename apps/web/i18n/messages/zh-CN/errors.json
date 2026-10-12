@@ -178,6 +178,7 @@
     "originForbidden": "当前来源不允许访问。"
   },
   "embedding": {
+    "reindexInProgress": "已有补建索引任务正在执行，请稍后再试。",
     "serviceNotConfigured": "请先启用并配置 Embedding 服务。",
     "serviceUnavailable": "向量服务不可用。",
     "submitFailed": "向量化任务提交失败，请稍后重试。",
@@ -312,6 +313,8 @@
     "invalidContent": "消息内容无效。",
     "invalidFeedback": "消息反馈无效。",
     "invalidId": "消息 ID 无效。",
+    "invalidUiState": "组件状态无效或超出大小限制。",
+    "uiStateTargetInvalid": "该消息暂时无法保存组件状态。",
     "notFound": "消息不存在。",
     "multipleImageProcessors": "一条消息只能选择一个图片处理器。",
     "tooManyFiles": "单条消息包含的文件过多。",
@@ -558,5 +561,23 @@
       "contentModeration": "此服务器不提供内容审核。",
       "sharing": "此服务器不提供公开分享。"
     }
+  },
+  "personalProvider": {
+    "disabled": "当前账号未开启自定义服务商。",
+    "notFound": "服务商不存在。",
+    "limitReached": "已达服务商数量上限。",
+    "invalidName": "名称无效。",
+    "invalidProtocol": "不支持的接口协议。",
+    "invalidBaseUrl": "服务地址无效，仅支持 HTTPS。",
+    "blockedHost": "该地址不允许使用。",
+    "invalidApiKey": "API Key 格式无效。",
+    "invalidModels": "所选模型无效。",
+    "invalidModelProtocol": "该模型不支持所选接口协议。",
+    "invalidIcon": "图标无效。",
+    "suspended": "服务商已被管理员禁用。",
+    "upstreamRejected": "服务商拒绝请求，请检查 API Key。",
+    "upstreamUnavailable": "无法连接服务商，请检查地址和协议。",
+    "modelUnavailable": "该模型暂不可用，请检查自定义服务商设置或更换模型。",
+    "duplicate": "该 API Key 已添加。"
   }
 }

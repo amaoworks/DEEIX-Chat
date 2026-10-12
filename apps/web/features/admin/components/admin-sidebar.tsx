@@ -40,6 +40,7 @@ const ADMIN_SECTION_LABEL_KEYS: Record<AdminSection, string> = {
   files: "sections.chatFiles",
   "internal-messaging": "sections.internalMessaging",
   "knowledge-bases": "sections.knowledgeBases",
+  "user-keys": "sections.userKeys",
   about: "sections.about",
 };
 

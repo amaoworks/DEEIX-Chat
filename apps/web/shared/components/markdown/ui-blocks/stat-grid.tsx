@@ -6,6 +6,7 @@ import * as React from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { UIBlockDefinition, UIBlockRenderProps, UIBlockSkeletonProps } from "./block";
+import { joinTextBlocks, textPair, textTitle, textValue } from "./block-text";
 import { s } from "./schema";
 import { UIBlockFrame } from "./ui-block-frame";
 
@@ -152,6 +153,14 @@ function StatGridSkeleton({ items = 0 }: UIBlockSkeletonProps) {
   );
 }
 
+function statGridText(props: StatGridProps): string {
+  const items = props.items.map((item) => {
+    const delta = item.delta?.trim() ? ` (${item.delta.trim()})` : "";
+    return `- ${textPair(item.label, textValue(item.value), item.unit)}${delta}`;
+  });
+  return joinTextBlocks([...textTitle(props.title), items.join("\n")]);
+}
+
 export const statGridDefinition: UIBlockDefinition<StatGridProps> = {
   name: "stat-grid",
   version: 1,
@@ -179,4 +188,5 @@ export const statGridDefinition: UIBlockDefinition<StatGridProps> = {
   ),
   Component: StatGrid,
   Skeleton: StatGridSkeleton,
+  toText: statGridText,
 };

@@ -10,8 +10,10 @@ import { SlideSwitch } from "@/shared/components/slide-switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { UIBlockDefinition, UIBlockRenderProps, UIBlockSkeletonProps } from "./block";
+import { joinTextBlocks, textTitle } from "./block-text";
 import { s } from "./schema";
 import { UIBlockFrame } from "./ui-block-frame";
+import { useUIBlockState } from "./ui-block-state";
 
 type CardGridItem = {
   tag?: string;
@@ -46,7 +48,6 @@ function safeHTTPURL(value: string | undefined): { href: string; host: string } 
 
 function CardGrid({ id, props }: UIBlockRenderProps<CardGridProps>) {
   const t = useTranslations("chat.markdown.uiBlock");
-  const [filter, setFilter] = React.useState(ALL_FILTER);
   // Slide direction follows tab order: picking a chip to the right slides in from the right.
   const [direction, setDirection] = React.useState<1 | -1>(1);
   // Filter chips derive from item tags in first-seen order; the model does not declare them separately.
@@ -54,6 +55,12 @@ function CardGrid({ id, props }: UIBlockRenderProps<CardGridProps>) {
     () => Array.from(new Set(props.items.map((item) => item.tag).filter((tag): tag is string => Boolean(tag)))),
     [props.items],
   );
+  // A stored tag the items no longer carry falls back to showing everything.
+  const [{ filter }, setState] = useUIBlockState(id, {
+    defaults: { filter: ALL_FILTER },
+    restore: (saved, defaults) => (typeof saved?.filter === "string" && filters.includes(saved.filter) ? { filter: saved.filter } : defaults),
+    title: props.title,
+  });
   const visible = React.useMemo(
     () => (filter === ALL_FILTER ? props.items : props.items.filter((item) => item.tag === filter)),
     [filter, props.items],
@@ -61,7 +68,7 @@ function CardGrid({ id, props }: UIBlockRenderProps<CardGridProps>) {
   const tabs = React.useMemo(() => [ALL_FILTER, ...filters], [filters]);
   const selectFilter = (next: string) => {
     setDirection(tabs.indexOf(next) >= tabs.indexOf(filter) ? 1 : -1);
-    setFilter(next);
+    setState({ filter: next });
   };
 
   return (
@@ -164,6 +171,15 @@ function CardGridSkeleton({ items = 0 }: UIBlockSkeletonProps) {
   );
 }
 
+function cardGridText(props: CardGridProps): string {
+  const items = props.items.map((item) => {
+    const details = [item.summary?.trim(), item.source?.trim(), safeHTTPURL(item.url)?.href].filter(Boolean).join(" · ");
+    const tag = item.tag?.trim() ? `[${item.tag.trim()}] ` : "";
+    return `- ${tag}**${item.title.trim()}**${details ? ` — ${details}` : ""}`;
+  });
+  return joinTextBlocks([...textTitle(props.title), items.join("\n")]);
+}
+
 export const cardGridDefinition: UIBlockDefinition<CardGridProps> = {
   name: "card-grid",
   version: 1,
@@ -188,4 +204,5 @@ export const cardGridDefinition: UIBlockDefinition<CardGridProps> = {
   ),
   Component: CardGrid,
   Skeleton: CardGridSkeleton,
+  toText: cardGridText,
 };

@@ -154,6 +154,7 @@
       "itemCount": "{count} 条",
       "unknownComponent": "不支持的组件 {component}",
       "invalidProps": "组件 {component} 的数据不完整，已显示原始内容",
+      "renderFailed": "组件 {component} 渲染出错，已显示原始内容",
       "reset": "重置",
       "back": "返回",
       "missingNode": "找不到节点 {id}",
@@ -193,7 +194,30 @@
       "diffPrevChange": "上一处修改",
       "diffNextChange": "下一处修改",
       "diffCopyAfter": "复制修改后内容",
-      "quizNext": "下一题"
+      "quizNext": "下一题",
+      "askHint": "发送这条追问（Enter 发送，Shift+Enter 换行）",
+      "askBusy": "等当前回复完成后再发送",
+      "askUnavailable": "这里不能发送消息",
+      "copy": "复制",
+      "copied": "已复制",
+      "copyFailed": "复制失败",
+      "formulaIssues": "{count} 处公式或数据未能处理",
+      "prefilled": "已填入输入框，确认后发送",
+      "prefillSkipped": "输入框里已有内容，组件的文字没有填入",
+      "openInPanel": "在侧栏打开",
+      "panelTitle": "交互组件",
+      "closePanel": "关闭侧栏",
+      "widgetGenerating": "正在绘制交互图解…",
+      "widgetGeneratingTitled": "正在绘制「{title}」…",
+      "widgetTitle": "交互图解",
+      "widgetUnavailable": "当前环境无法运行交互图解，以下是源码",
+      "widgetTooLarge": "交互图解过大，未运行，以下是源码",
+      "viewSource": "查看源码",
+      "hideSource": "收起源码",
+      "askLabel": "追问",
+      "askPlaceholder": "输入要追问的内容",
+      "askSend": "发送追问",
+      "askRestore": "恢复为建议的问题"
     },
     "copyLatex": "复制公式源码",
     "latexCopied": "已复制公式源码",
@@ -233,7 +257,10 @@
       "exitFullscreen": "退出",
       "zoomIn": "放大",
       "zoomOut": "缩小",
-      "resetView": "重置视图"
+      "resetView": "重置视图",
+      "rendering": "正在渲染图表…",
+      "renderFailed": "图表渲染失败",
+      "viewSource": "查看源码"
     }
   },
   "artifacts": {
@@ -254,11 +281,20 @@
     "close": "关闭",
     "resize": "调整 Artifact 宽度",
     "empty": "当前 Artifact 为空，暂无法预览。",
+    "generating": "正在生成，代码完成后显示预览。",
     "security": "预览运行在隔离沙箱中，外部网络、表单、弹窗、父页面访问和存储访问均受限制。"
   },
   "messages": {
     "debugRequest": "请求",
     "debugResponse": "响应",
+    "debugFormatted": "格式化",
+    "debugRaw": "原始",
+    "debugViewMode": "显示方式",
+    "debugSide": "请求或响应",
+    "debugCopy": "复制内容",
+    "debugCopied": "已复制",
+    "debugCopyFailed": "复制失败",
+    "debugEmpty": "无内容",
     "copied": "已复制消息内容",
     "copyFailed": "复制失败",
     "copyFailedDescription": "请稍后重试。",
@@ -511,6 +547,11 @@
     "defaultModelUnavailable": "当前模型不可用，请重新选择模型。",
     "sessionExpired": "登录状态已失效，请重新登录。",
     "retryLater": "请稍后重试。",
+    "errorId": "错误 ID",
+    "errorIdHint": "反馈问题时请提供此 ID，管理员可据此查询原因。",
+    "copyErrorId": "复制错误 ID",
+    "errorIdCopied": "已复制错误 ID",
+    "errorIdCopyFailed": "复制失败",
     "streamResponseParseFailed": "上游返回 HTTP {statusCode}，但流式响应格式与当前协议不兼容。",
     "jsonMustBeObject": "JSON 必须是对象",
     "currentModel": "当前模型",
@@ -624,20 +665,18 @@
       }
     },
     "mediaMode": {
-      "imageGeneration": "图像生成",
-      "imageGenerationIntro": "当前为图像生成模式。",
-      "imageGenerationDescription": "将根据文字提示创建新图像；上传图片后会自动切换为图像编辑。",
-      "imageEdit": "图像编辑",
-      "imageEditIntro": "当前为图像编辑模式。",
-      "imageEditDescription": "将基于已上传图片和文字提示进行编辑。",
-      "videoGeneration": "视频生成",
-      "videoGenerationIntro": "当前为视频生成模式。",
-      "videoGenerationDescription": "将根据文字提示生成视频；上传一张图片后会作为视频参考输入。",
-      "videoExtension": "视频扩展",
-      "videoExtensionIntro": "当前为视频扩展模式。",
-      "videoExtensionDescription": "将根据文字提示扩展已上传的 MP4 视频，仅需设置扩展时长。",
-      "invalidFile": "监测到无效文件",
-      "invalidFileIntro": "当前文件无法用于媒体任务。",
+      "placeholders": {
+        "image_generation": "描述要生成的图像",
+        "image_edit": "描述要如何修改这张图片",
+        "video_generation": "描述要生成的视频",
+        "video_extension": "描述视频接下来的内容"
+      },
+      "parameters": {
+        "image_generation": "图像生成参数",
+        "image_edit": "图像编辑参数",
+        "video_generation": "视频生成参数",
+        "video_extension": "视频扩展参数"
+      },
       "blockedDescriptions": {
         "image_edit_input_required": "请先上传需要编辑的图片。",
         "image_edit_unsupported": "当前模型不支持图像编辑，请移除图片或切换模型。",
@@ -675,13 +714,15 @@
     },
     "viewPricing": "查看价格",
     "freeBadge": "免费",
+    "personalBadge": "自有",
     "detail": {
       "modalities": "模态",
       "context": "上下文",
       "price": "价格",
       "perMillion": "每 1M tokens",
       "schedule": "时段倍率",
-      "unknown": "未知"
+      "unknown": "未知",
+      "chargedByProvider": "由服务商收取"
     },
     "freeModel": "免费模型",
     "freeModelDescription": "不会扣除按量余额",
@@ -1136,6 +1177,7 @@
     "numberInvalid": "请输入有效的数值",
     "numberInvalidRange": "请输入 {min} – {max} 之间的有效数值",
     "increase": "增加",
-    "decrease": "减少"
+    "decrease": "减少",
+    "empty": "该模型没有可调参数。"
   }
 }

@@ -458,6 +458,8 @@ func cleanupConfigEnv(t *testing.T) {
 		"INTERNAL_MESSAGING_SECRET",
 		"INTERNAL_MESSAGING_SECRET_FILE",
 		"INTERNAL_MESSAGING_TIMEOUT_MS",
+		"DATA_ENCRYPTION_KEY",
+		"DATA_ENCRYPTION_KEYS_PREVIOUS",
 	}
 	for _, key := range keys {
 		key := key
