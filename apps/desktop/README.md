@@ -15,9 +15,11 @@ apps/desktop/src-tauri (Rust)
         ├── tabs               src/tabs.rs       one window, one webview per server, tab strip webview
         ├── sidecar            src/sidecar.rs    bundled Go server for local mode (loopback, SQLite)
         ├── session            src/session.rs    server choice + keychain + refresh (token never exposed to JS)
+        ├── proxy              src/proxy.rs      network proxy: OS settings or the app's own, for sidecar, shell and webviews
         ├── tray               src/tray.rs       show / quit, left click restores the window
         ├── menu               src/menu.rs       macOS menu bar: File ▸ Close Tab ⌘W / Close Window ⇧⌘W
         ├── OAuth loopback     src/oauth_loopback.rs  RFC 8252 receiver on 127.0.0.1:<ephemeral>
+        ├── downloads          src/downloads.rs  `<a download>` → Downloads folder, result reported to the tab
         ├── updater            tauri-plugin-updater + apps/web/shared/platform/desktop-updater.ts
         └── CSP                no inline/remote scripts; network open to http(s) (user picks the server)
 ```
@@ -109,6 +111,13 @@ Storage (localStorage) is shared across tabs on purpose: it holds UI
 preferences such as theme and fonts, which should follow the user, not the
 server.
 
+Downloads (`<a download>`: images, exports, file previews) go straight to the
+user's Downloads folder; wry appends ` (1)`, ` (2)` … rather than overwrite.
+Without a download handler WKWebView would cancel them silently. No webview
+shows download UI, so the shell emits `downloads:finished` to the tab that
+started one and the page shows a toast (`desktop-download-notifier.tsx`). The
+webview gets no filesystem permission for this: Rust picks the path.
+
 ## Two ways to run
 
 | | Local | Remote |
@@ -155,6 +164,48 @@ Which features the local server offers is declared by `GET /api/v1/capabilities`
 and enforced by the server (`404 feature.disabled`); the web app renders from
 those flags and never checks the platform. See `docs/ARCHITECTURE.md` §4.
 
+## Network proxy
+
+`src/proxy.rs` decides one proxy per launch and hands it to everything that
+leaves the machine. Settings › Network (desktop only) offers three modes:
+follow the system (default), a manual `http://` or `socks5://` proxy with an
+optional sign-in, or no proxy.
+
+| Consumer | How it gets the proxy |
+| --- | --- |
+| Bundled server (local mode) | `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` on the child process, every spelling set so nothing inherited survives. The server keeps its contract: proxy settings only ever come from its environment, and in local mode the shell is its deployer. |
+| Shell requests (session refresh, update checks) | `proxy::apply` on each reqwest client. Loopback origins are always direct. |
+| Webviews | Windows: WebView2 `--proxy-server` / `--proxy-bypass-list` / `--no-proxy-server`. macOS and Linux follow the OS: a per-webview proxy needs macOS 14, and Tauri gives WebKitGTK no bypass list, so even the local server's loopback traffic would go to the proxy. |
+
+Where the proxy comes from, highest first: enterprise policy (`ProxyMode` and
+friends, below), the app setting, the process's `HTTP(S)_PROXY` / `ALL_PROXY`,
+then the OS — Windows through `WinHttpGetIEProxyConfigForCurrentUser`, macOS
+through the dynamic store (`SCDynamicStoreCopyProxies`); Linux has no OS source
+besides the environment.
+
+The OS bypass lists are translated, because Go and reqwest read `NO_PROXY`
+syntax only: `127.*` / `192.168.*` become CIDR blocks, `*.corp` becomes
+`.corp`, macOS's `169.254/16` is padded. `<local>` (dotless host names) has no
+equivalent and is dropped. Loopback is always added.
+
+Deliberate limits:
+
+- **PAC and WPAD are not applied** to the shell or the bundled server: there is
+  no proxy address to hand over. The settings page says so; the webviews still
+  use the script, through the OS.
+- **An unreachable proxy is not bypassed.** Requests fail as they do in the
+  system browser; silently connecting directly would route around a proxy the
+  user or the administrator chose.
+- **The webviews never get proxy credentials.** Neither engine takes them up
+  front and Tauri forwards no sign-in prompt, so a manual proxy that needs a
+  password leaves the window on the OS settings; the shell and the bundled
+  server use the password.
+- **Changes apply at the next launch.** The sidecar and the webviews take their
+  proxy when they are created; the page shows "restart required" and a button.
+
+The setting is stored in `network.json` next to `tabs.json`; the password in the
+keychain (see [Keychain entries](#keychain-entries)).
+
 ## Credential model
 
 The browser build keeps the refresh token in an HttpOnly cookie, so page script
@@ -167,6 +218,9 @@ cannot read it. The desktop shell reproduces that property in Rust:
 | Who sends it | browser, to the cookie's origin | `session.rs`, to the pinned origin only |
 | Readable by page script | no | no — `store_session` is write-once, there is no read command |
 | Server address | page origin | bound per tab, persisted in `tabs.json`; closing the tab drops that session |
+
+The shell never routes a request to a loopback server through a proxy, so the
+local-mode grant and the refresh token stay on the machine.
 
 The webview holds the refresh token exactly once, in the login response, and
 hands it to `store_session` immediately. After that the only session commands
@@ -210,6 +264,12 @@ A local Windows build of a prerelease version (`x.y.z-beta.n`) fails at the MSI
 step, because MSI versions must be numeric. Build the setup only
 (`pnpm tauri build --bundles nsis`) or pass the config CI uses:
 `node scripts/release-config.mjs --channel beta` prints the `--config` argument.
+
+The macOS app requires macOS 12 (`bundle.macOS.minimumSystemVersion`, which
+becomes `LSMinimumSystemVersion`; Go 1.26 supports nothing older). Tauri builds
+the Rust binary for it, and `build-sidecar.mjs` passes the same version to cgo;
+otherwise the sidecar would require the macOS of the build machine, and local
+mode would not start on older systems that can still install the app.
 
 Building is not enough to ship: macOS packages must be **notarized** and Windows
 packages **code-signed**, otherwise users cannot install them. Signing keys and
@@ -256,24 +316,85 @@ The JS updater permission is not in the static capability: it is granted at
 runtime only in `auto` mode, so a portable or MSI build cannot install updates
 even if the web layer asked.
 
-Release assets are renamed by `scripts/rename-release-assets.mjs` to
+Release assets are staged by `scripts/collect-release-assets.mjs` as
 `DEEIX-Chat-<version>-<os>-<arch>[-setup|-updater].<ext>`, e.g.
 `DEEIX-Chat-0.4.4-beta.1-macos-arm64.dmg`, `-linux-x64.AppImage`,
-`-windows-x64-setup.exe`, `-macos-arm64-updater.tar.gz`. The plan is
-validated for collisions before anything is renamed, and the updater manifest,
-which references assets by file name, is reconciled from its own URLs, so the
-job can be re-run after an interruption. Only the artifact bytes are signed, so
-verification is unaffected. `pnpm test` covers the mapping.
+`-windows-x64-setup.exe`, `-macos-arm64-updater.tar.gz`. Every target must have
+exactly one of each required package and its updater signature before staging.
+After all targets pass, `scripts/publish-desktop-release.mjs` assembles
+`latest.json` and `SHA256SUMS` from those final files and uploads them to one
+draft. It preserves the updater platform keys used by existing installs,
+resumes a single existing draft and refuses to replace a published release.
+Only the artifact bytes are signed, so staging under a new name does not change
+their signatures. `pnpm test` covers staging, updater compatibility and hashes.
 
 Release flow: merging a `VERSION` bump into `main` creates the tag
 `v<VERSION>` (`release-tag.yml`), which builds every target and opens a
-**draft** GitHub Release with the installers and a signed `latest.json`.
+**draft** GitHub Release with the installers and `latest.json` containing their signatures.
 Publishing the draft is the step that ships the update; until then existing
 installs see nothing. Pushing the tag by hand does the same.
+
+Before tagging, update `VERSION`, run `make version` and commit the synchronized
+version files, including the desktop root package entry in `Cargo.lock` and the
+generated Swagger/TypeScript API contracts. This uses the same generation
+pipeline as `pnpm api:generate`; Go and workspace JS dependencies are required.
+`make version-check` runs the full API contract drift check as well as version
+checks, so stale manifests, lock metadata or generated API versions fail before
+release. Dependency versions stay pinned.
 
 Windows assets: `-windows-x64-setup.exe`, `-windows-x64.msi`,
 `-windows-x64-portable.zip` (and `-portable-offline.zip` when built). Every
 release also carries `SHA256SUMS` and GitHub build provenance attestations.
+
+### Release workflows
+
+[`desktop-release.yml`](../../.github/workflows/desktop-release.yml) coordinates
+the following reusable workflows. Each native job receives the same immutable
+source commit and channel; platform-specific installation, signing and
+verification live in that platform's file.
+
+| Workflow | Responsibility |
+| --- | --- |
+| [`desktop-prepare.yml`](../../.github/workflows/desktop-prepare.yml) | Verify the run's source commit and tag, check version consistency, then build the frontend and refresh catalog snapshots once, in parallel. |
+| [`desktop-macos.yml`](../../.github/workflows/desktop-macos.yml) | Build arm64 natively and cross-compile x64 on ARM `macos-26` runners; sign the app, create the final DMG and updater archive, then verify both. |
+| [`desktop-linux.yml`](../../.github/workflows/desktop-linux.yml) | Build x64 sidecar/executable, bundle deb/AppImage and verify the Wayland library exclusion. |
+| [`desktop-windows.yml`](../../.github/workflows/desktop-windows.yml) | Build x64 sidecar/executable, sign and verify NSIS/MSI/portable packages, and attest their provenance. |
+
+The four native jobs run in parallel after preparation. Shared toolchain/cache
+setup lives in [the desktop-setup action](../../.github/actions/desktop-setup/action.yml).
+The frontend and catalog are downloaded as workflow artifacts; native jobs
+disable Tauri's frontend build hook, so they never rebuild the shared frontend.
+Compilation, bundling, notarization and verification have separate steps. Rust
+`--timings` reports are retained as `desktop-timings-*` artifacts for seven days.
+The shipped Rust optimization profile, including fat LTO, is unchanged.
+
+Release-tag runs dispatch `desktop-release.yml` on the **release tag**. Every
+job checks out the run's immutable `github.sha`; source inputs are verified
+against that commit and cannot select code from a different ref. Tag code writes
+only to its own cache scope, keeping the default branch and other tags isolated.
+Compatible caches from default-branch CI can still be restored, and reruns of
+the same tag reuse its caches. Successive tags cannot restore caches written by
+each other, so their first native builds may need recompilation. Publication
+verifies the tag has not moved, and Windows provenance records the matching
+workflow and desktop source commits. Rust is pinned in the setup action, and
+Rust/Go cache keys include the target triple so the two macOS targets sharing
+ARM runners cannot overwrite one another's cache. Dependency changes or cache
+eviction can also cause rebuilds.
+
+To build an existing tag containing these workflows and scripts:
+
+```bash
+gh workflow run desktop-release.yml --ref refs/tags/v1.2.3
+```
+
+The tag must contain the reusable workflows, build scripts and setup action;
+rerun the original workflow for historical tags. A manual branch run with an
+empty `release_tag` only uploads workflow artifacts; a manual tag run creates a
+draft. Setting `release_tag` on a branch dispatches the workflow onto that tag
+without building it in the branch's context. On a tag run, a nonempty input must
+match the current tag. A release run creates the draft only after all four
+targets succeed; publishing the draft remains a separate human step. Failed
+jobs can be retried while the shared artifacts are retained (seven days).
 
 ### Channels
 
@@ -356,6 +477,9 @@ only reflects it.
 | `LockServerUrl` | REG_DWORD `1` | Only `DefaultServerUrl` may be used (requires a valid `DefaultServerUrl`); also disables local mode. Saved tabs for other servers are dropped with their credentials. |
 | `DisableLocalMode` | REG_DWORD `1` | The bundled local server cannot be used. |
 | `DisableAutoUpdate` | REG_DWORD `1` | No update checks in any form. |
+| `ProxyMode` | REG_SZ `system` / `direct` / `fixed_servers` | Replaces the user's proxy choice ([Network proxy](#network-proxy)). The hive that sets it decides `ProxyServer` and `ProxyBypassList` too. |
+| `ProxyServer` | REG_SZ | `host:port`, `http://host:port` or `socks5://host:port`, for `fixed_servers`. No credentials; an invalid value makes the policy ignored. |
+| `ProxyBypassList` | REG_SZ | Hosts, `*.example.com`, addresses and ranges that skip the proxy, `;` or `,` separated. |
 
 Group Policy templates and an example `.reg` live in
 [`deploy/windows/`](../../deploy/windows/README.md).
@@ -372,8 +496,13 @@ What a local `pnpm build` costs once caches are warm, and where it goes:
 | `.app` | ~1 s | | |
 | `.dmg` | ~25 s | | `hdiutil` + Finder layout; `scripts/package-dmg.sh` then re-encodes with lzfse and (when signing is configured) re-signs and notarizes |
 
-`pnpm build:signed` produces exactly what CI ships. Use `pnpm build:app` while
-iterating: it relaxes LTO (~17 s link) and stops at the `.app`.
+`pnpm build:signed` uses the local Tauri DMG/repackaging path above. CI uses
+`scripts/package-macos.sh`: it creates the `.app` first, completes its signing
+and notarization, then creates an ULFO DMG directly from that app. It avoids
+building a compressed DMG only to decompress, replace the app and recompress it.
+The updater tarball is created from the same final app and then signed with the
+updater key. Both packages go through `verify-macos-bundle.sh` before staging.
+Use `pnpm build:app` while iterating: it relaxes LTO (~17 s link) and stops at the `.app`.
 
 Every `no*` tag has an `*_off.go` counterpart that returns a clear error if the
 config selects a driver that was compiled out.
@@ -394,6 +523,7 @@ app icon.
 | Platform | What is needed | CI secrets |
 | --- | --- | --- |
 | macOS | Developer ID Application certificate (.p12) + Apple ID app-specific password for notarization; identity and team id are derived from the certificate (`scripts/apple-signing-env.sh`) | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` |
+| macOS, external service | Alternative app/DMG signing and notarization provider | `SIGN_AND_NOTARIZE_SCRIPT_URL`, `SIGN_AND_NOTARIZE_BASE_URL`, `SIGN_AND_NOTARIZE_API_TOKEN`, `SIGN_AND_NOTARIZE_HELPER_URL` |
 | Windows | Code-signing certificate (.pfx) | `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` |
 | All | Updater keypair (`tauri signer generate`); the private key is kept git-ignored in `deploy/secrets/` (see its README) | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
@@ -405,13 +535,35 @@ signs the exe inside each installer and the sidecar; the portable exe is signed
 separately with signtool. A CI step then requires a valid Authenticode signature
 on the setup, MSI, portable exe and sidecar whenever a certificate is configured.
 
+CI chooses the external macOS provider when all four `SIGN_AND_NOTARIZE_*`
+secrets are set, even if Apple credentials also exist. Tauri only ad-hoc signs
+in that mode; the external service signs/notarizes the app once and then the
+final DMG. The updater archive is created afterwards, from the signed app.
+A partial external configuration fails immediately. Without the external
+provider, the existing `APPLE_*` credentials enable Tauri app signing and
+notarization; DMG signing imports its own temporary keychain because Tauri
+removes its keychain when app bundling finishes.
+
+On macOS, `scripts/verify-macos-bundle.sh` checks the app as it ships, inside the
+final DMG and inside the updater archive, before CI uploads the DMG: the app
+binary and the sidecar must be built for the leg's architecture and must not
+require a newer macOS than the app declares, and the bundle must pass
+`codesign --verify --deep --strict`. With a Developer ID it also requires the
+certificate's team id on the app and the DMG, a stapled notarization ticket on
+both, and a Gatekeeper assessment of `Notarized Developer ID`.
+The DMG signer is checked against Apple's Developer ID Application certificate
+chain and its certificate's Team ID (`subject.OU`), because a signed disk image
+can report `TeamIdentifier=not set` in `codesign -dv` output.
+`pnpm build:signed` runs the same check.
+
 Only the updater key is mandatory. Platform signing switches on by itself once
-its secrets exist. Without a Developer ID the macOS app is signed **ad-hoc**
-(`APPLE_SIGNING_IDENTITY=-`); Tauri would otherwise skip `codesign` and leave
-only the linker's signature, which macOS reports as *damaged* on Apple silicon.
-Ad-hoc builds still need the user to allow the app under System Settings →
-Privacy & Security and are for internal testing, not public releases. Signing
-keys never enter the repository.
+its secrets exist; CI fails when only some of the macOS secrets are set instead
+of quietly building an unnotarized app. Without a Developer ID the macOS app is
+signed **ad-hoc** (`APPLE_SIGNING_IDENTITY=-`); Tauri would otherwise skip
+`codesign` and leave only the linker's signature, which macOS reports as
+*damaged* on Apple silicon. Ad-hoc builds still need the user to allow the app
+under System Settings → Privacy & Security and are for internal testing, not
+public releases. Signing keys never enter the repository.
 
 To obtain the .p12 on macOS: Keychain Access → My Certificates → right-click the
 "Developer ID Application" cert → Export → base64 it (`base64 -i cert.p12 | pbcopy`).
@@ -422,8 +574,10 @@ To obtain the .p12 on macOS: Keychain Access → My Certificates → right-click
 | --- | --- |
 | Service | `com.deeix.chat.desktop` |
 | Account | `refresh-token:<origin>` (e.g. `refresh-token:https://chat.example.com`) |
+| Account | `proxy-password`: the manual proxy's password, only while a username is set |
 
-One entry per origin; switching servers deletes the previous entry rather than
-leaving dormant credentials behind. A Windows portable copy uses the service
+One refresh token per origin; switching servers deletes the previous entry
+rather than leaving dormant credentials behind. The proxy password is removed
+the same way when the username is cleared. A Windows portable copy uses the service
 `com.deeix.chat.desktop.portable-<instance-id>` instead (see
 [Portable edition](#portable-edition)).

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  English | <a href="./docs/README.zh-CN.md">简体中文</a>
+  English | <a href="./README.zh-CN.md">简体中文</a>
 </p>
 
 <p align="center">
@@ -160,9 +160,9 @@ The backend keeps clear internal boundaries: `backend/cmd/server` is the executa
 
 ## Prerequisites
 
-- Node.js 20.9 or newer (the repository Docker image and CI use Node.js 24).
-- pnpm 10.17.0, normally enabled through Corepack.
-- Go 1.26.8 for backend development.
+- Node.js 22.23.4, 24.22.1 or 26.12.1 — the first patched release of each maintained line (`engines` allows all three; Node 20 and older are end-of-life). `.nvmrc`, CI and the Docker image all use 26.12.1.
+- pnpm 10.17.0 (`npm install -g pnpm@10.17.0`; Node 26 no longer bundles Corepack).
+- Go 1.26.10 for backend development.
 - Docker Engine with Docker Compose v2 for container deployments or local PostgreSQL/Redis services.
 
 The SQLite profile does not require a separately managed database or cache. The default development configuration uses PostgreSQL and Redis; the full Compose profile starts both services for you.
@@ -241,12 +241,41 @@ repository root and routes to pnpm / turbo / cargo / go underneath.
 | `make build-desktop` / `make release-desktop` | Quick local `.app` / signed release bundle. |
 | `make verify` | check + test + build, what CI runs. |
 | `make api-docs` | Regenerate Swagger artifacts and TypeScript API types. |
-| `make version` | Propagate `VERSION` to every package manifest. |
+| `make version` / `make version-check` | Synchronize/check versions, Cargo.lock and generated Swagger/TypeScript API contracts. |
 
 The same verbs exist as pnpm scripts (`pnpm dev:api`, `pnpm check`, …) for
 tooling that prefers them; CI uses those directly.
 
 The frontend is exported as static files, so `pnpm build` writes the browser artifact to `apps/web/out`. The Go service can serve that directory in the production image or through `server.frontend_dist_dir`.
+
+### Desktop Releases
+
+Merging a `VERSION` bump into `main` creates `v<VERSION>` and starts
+[`desktop-release.yml`](.github/workflows/desktop-release.yml). Tag pushes also
+trigger it. The parent workflow delegates to reusable workflows:
+
+| Workflow | Responsibility |
+| --- | --- |
+| [`desktop-prepare.yml`](.github/workflows/desktop-prepare.yml) | Resolve the source commit, validate versions, build the frontend and refresh catalog snapshots once. |
+| [`desktop-macos.yml`](.github/workflows/desktop-macos.yml) | Separate arm64 and x64 invocations build, sign, notarize and verify the DMG/updater packages. |
+| [`desktop-linux.yml`](.github/workflows/desktop-linux.yml) | Build x64 deb/AppImage packages and verify Wayland library exclusions. |
+| [`desktop-windows.yml`](.github/workflows/desktop-windows.yml) | Build x64 NSIS/MSI/portable packages, verify signatures and attest their provenance. |
+
+The four native jobs run in parallel after preparation and reuse the same
+frontend/catalog artifacts. Releases run in their tag's context and every job
+checks out the run's immutable commit. Tag caches remain isolated from the
+default branch and other tags, while compatible default-branch CI caches can
+still be restored. Rust is pinned, Rust/Go caches are separated by
+target, and the fat LTO release profile is unchanged. macOS packages are created
+from the same final signed app, avoiding DMG recompression.
+
+Only after every target passes does the parent assemble `latest.json` and
+`SHA256SUMS` and upload a **draft** release. Publishing the draft ships the update.
+Manual branch runs with an empty `release_tag` only upload workflow artifacts;
+manual tag runs create a draft release. A branch run with `release_tag` set
+dispatches the build onto that tag. See the
+[desktop release guide](apps/desktop/README.md#release-workflows) for manual tag
+builds, signing secrets, cache behavior and compilation timing reports.
 
 ### Docker Deployment
 
@@ -342,6 +371,8 @@ The default compose files persist application data:
 | VoceChat messages | `/home/vocechat-server/data`, full profile or messaging overlay |
 | VoceChat third-party secret | `/run/secrets/vocechat`, full profile or messaging overlay |
 | VoceChat init credentials | `/var/lib/deeix-vocechat-init`, full profile or messaging overlay |
+
+To move a PostgreSQL database to another machine, use `pg_dump` and restore into a freshly initialized server. Do not copy the data directory or volume between images with a different C library or locale (for example `postgres:*-alpine` and the Debian-based `pgvector/pgvector`): text indexes are ordered by the collation they were built with, so after such a move unique indexes stop detecting existing rows and duplicates appear. If a database has already been moved this way, run `REINDEX DATABASE <name>;` (and `ALTER DATABASE <name> REFRESH COLLATION VERSION;` when the server reports a collation version mismatch). Duplicate rows block the rebuild and must be removed first. On startup the application removes duplicate rows in `system_settings` and rebuilds that table's indexes, and logs a warning when it does.
 
 Compose profiles use the application image `ghcr.io/amaoworks/deeix-chat:latest` by default. To update an existing deployment, run `docker compose pull` followed by `docker compose up -d`, using the same `-f` options as the installation. Compose files reference an image and do not define a build step. Build a local image first, then select it with `DEEIX_CHAT_IMAGE`:
 
@@ -532,7 +563,7 @@ Authentication, registration, conversation settings, model option policies, file
 
 When SSRF protection is enabled in production, administrator-saved model, MCP, Embedding, OIDC/OAuth2, and custom Turnstile endpoints are authorized locally by exact origin (`scheme + host + port`) and do not require entries in the global allowlist. Model, MCP, and Embedding redirects retain standard compatibility: public cross-origin targets are allowed, while private cross-origin targets must match `SSRF_ALLOWED_HOSTS` or `SSRF_ALLOWED_CIDRS`; OIDC/OAuth2 and Turnstile keep their stricter identity boundary. Generated media is downloaded, validated, and stored by the backend: a private artifact URL inherits trust only when it has the same origin as the selected model endpoint; public cross-origin artifact URLs remain subject to the strict public-network policy, and private cross-origin artifact URLs are blocked. The global allowlist also remains available for deployment-level integrations that cannot be tied to an administrator-saved endpoint, such as selected GeoIP or extraction deployments. Link-local, multicast, unspecified, and known metadata targets always remain blocked. Invalid allowlist entries stop backend startup, and global allowlist changes require a restart.
 
-Outbound requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables, including when SSRF protection is enabled. The proxy address itself is treated as deployment-authorized; target URLs are still validated against the SSRF policy before a proxy is selected, so metadata and other blocked targets remain rejected, and requests that bypass the proxy (via `NO_PROXY` or loopback) keep the full DNS-validated dial path. When a request is sent through the proxy, the proxy resolves the target hostname. Before handing it over, the backend rejects numeric hostnames such as `127.1` or `2130706433` and resolves the hostname locally once, rejecting it if any resolved address is blocked by the policy; if local resolution fails, the request is left to the proxy. This does not protect against DNS rebinding at the proxy, so DNS-level egress control remains the responsibility of your proxy. There is no proxy setting in `config.yaml`: proxy addresses and credentials stay in the deployment environment. Go does not read `ALL_PROXY`, so for a SOCKS proxy set `HTTP_PROXY` and `HTTPS_PROXY` to a `socks5://` URL; if only `ALL_PROXY` is set, the backend logs `outbound_proxy_ignored` at startup and connects directly. Proxy environment changes require a restart.
+Outbound requests honor the standard `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment variables, including when SSRF protection is enabled. The proxy address itself is treated as deployment-authorized; target URLs are still validated against the SSRF policy before a proxy is selected, so metadata and other blocked targets remain rejected, and requests that bypass the proxy (via `NO_PROXY` or loopback) keep the full DNS-validated dial path. When a request is sent through the proxy, the proxy resolves the target hostname. Before handing it over, the backend rejects numeric hostnames such as `127.1` or `2130706433` and resolves the hostname locally once, rejecting it if any resolved address is blocked by the policy; if local resolution fails, the request is left to the proxy. This does not protect against DNS rebinding at the proxy, so DNS-level egress control remains the responsibility of your proxy. There is no proxy setting in `config.yaml`: proxy addresses and credentials stay in the deployment environment. Go does not read `ALL_PROXY`, so for a SOCKS proxy set `HTTP_PROXY` and `HTTPS_PROXY` to a `socks5://` URL; if only `ALL_PROXY` is set, the backend logs `outbound_proxy_ignored` at startup and connects directly. Proxy environment changes require a restart. In the desktop app's local mode the app sets these variables for its bundled server from the proxy chosen in Settings › Network (by default the system proxy); see [apps/desktop/README.md](apps/desktop/README.md#network-proxy).
 
 ### OAuth callbacks for Web, App, and Desktop
 

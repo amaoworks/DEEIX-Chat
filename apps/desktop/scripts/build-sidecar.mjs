@@ -2,10 +2,10 @@
 //
 // Tauri's `bundle.externalBin` expects `<name>-<rust-target-triple>` next to
 // the config (e.g. binaries/deeix-chat-server-aarch64-apple-darwin) and strips
-// the suffix when bundling. The server links SQLite through cgo, so it is
-// always built natively on the platform that bundles it; CI runs this once per
-// matrix leg. Pass --target <triple> when cross-building on macOS (x86_64 on an
-// arm64 runner works because Apple ships both toolchains).
+// the suffix when bundling. The server links SQLite through cgo, so builds
+// need a C toolchain for the target. CI builds both macOS targets on arm64
+// runners. Pass --target <triple> for cross-builds on macOS (x86_64 on an
+// arm64 host works because Apple ships both toolchains).
 //
 // Usage: node scripts/build-sidecar.mjs [--target <rust-triple>]
 
@@ -53,7 +53,15 @@ if (process.env.DEEIX_REFRESH_CATALOG_SNAPSHOTS === "1") {
   execFileSync("go", ["run", "./cmd/catalog-snapshot", "-keep-on-error"], { cwd: backendDir, stdio: "inherit" });
 }
 
-console.log(`Building sidecar ${triple} (GOOS=${goos} GOARCH=${goarch}) → ${output}`);
+// The sidecar must run wherever the app installs. Without an explicit target,
+// clang and the Go linker build for the macOS of the build machine, and the
+// app would install on systems where its local server cannot start.
+const macosMinimum = goos === "darwin" ? macosMinimumVersion() : "";
+const macosFlags = macosMinimum ? `-mmacosx-version-min=${macosMinimum}` : "";
+
+console.log(
+  `Building sidecar ${triple} (GOOS=${goos} GOARCH=${goarch}${macosMinimum ? ` macOS ${macosMinimum}+` : ""}) → ${output}`,
+);
 
 // Local mode only uses SQLite, the memory cache and local storage; the other
 // drivers, the Swagger UI, gin's msgpack binding and the OTLP trace exporter
@@ -70,7 +78,15 @@ execFileSync("go", ["build", "-trimpath", "-tags", tags, "-ldflags", ldflags, "-
     CGO_ENABLED: "1",
     // Setting CGO_CFLAGS replaces cgo's defaults rather than adding to them,
     // so -O2 -g has to be repeated here.
-    CGO_CFLAGS: ["-O2 -g", sqliteIncludeFlags(), process.env.CGO_CFLAGS].filter(Boolean).join(" "),
+    CGO_CFLAGS: ["-O2 -g", sqliteIncludeFlags(), macosFlags, process.env.CGO_CFLAGS].filter(Boolean).join(" "),
+    // The flags, not only MACOSX_DEPLOYMENT_TARGET: they are part of Go's build
+    // cache key, so C objects cached for another macOS version are rebuilt.
+    ...(macosMinimum
+      ? {
+          CGO_LDFLAGS: [macosFlags, process.env.CGO_LDFLAGS].filter(Boolean).join(" "),
+          MACOSX_DEPLOYMENT_TARGET: macosMinimum,
+        }
+      : {}),
   },
 });
 
@@ -103,6 +119,17 @@ function sqliteIncludeFlags() {
   // Forward slashes: gcc accepts them on Windows too, and they survive
   // CGO_CFLAGS being split on whitespace without any escaping concerns.
   return `-I${includeDir.replaceAll("\\", "/")}`;
+}
+
+/** bundle.macOS.minimumSystemVersion, which Tauri writes into the app as LSMinimumSystemVersion. */
+function macosMinimumVersion() {
+  const config = JSON.parse(readFileSync(join(desktopDir, "src-tauri", "tauri.conf.json"), "utf8"));
+  const version = config.bundle?.macOS?.minimumSystemVersion;
+  if (!version) {
+    console.error("tauri.conf.json has no bundle.macOS.minimumSystemVersion.");
+    process.exit(1);
+  }
+  return version;
 }
 
 function hostTriple() {
